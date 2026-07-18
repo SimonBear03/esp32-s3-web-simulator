@@ -24,6 +24,12 @@ GPIO interrupt-matrix route. It connects the TCA8418 active-low interrupt to
 Cardputer ADV GPIO 11, allowing the normal ESP-IDF ISR path to consume keys
 without firmware polling.
 
+`patches/0004-esp32s3-gpspi-st7789.patch` adds the ESP32-S3 CPU-FIFO SPI2/SPI3
+path, transaction-done status and interrupts, and an original ST7789 model.
+The Cardputer ADV profile exposes a cropped 240x135 framebuffer and the StickS3
+profile exposes 135x240. QMP `screendump` captures the physical board display;
+the generic 800x600 helper is retained only for the profile-free machine.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:
@@ -47,6 +53,8 @@ gitignored `.cache/qemu/` directory, applies the tracked patches in order, and b
 Workers select the board model with `-M esp32s3,board-profile=cardputer-adv`
 or `-M esp32s3,board-profile=sticks3`. The service translates its stable input
 protocol to QMP `input-send-event`; browser clients never need QEMU key codes.
+The service captures the board framebuffer through QMP and validates QEMU's P6
+RGB output before exposing it through the engine-neutral web protocol.
 
 ## ROM and networking policy
 

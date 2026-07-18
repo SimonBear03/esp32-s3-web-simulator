@@ -3,7 +3,7 @@
 This simulator-owned fixture is the release gate for the base ESP32-S3 worker.
 It emits a stable UART contract for boot, flash capacity, heap, NVS persistence,
 timers, heartbeat continuity, byte-stream input, software reset, ESP32-S3 I2C,
-and TCA8418 key-event delivery.
+TCA8418 key-event delivery, ESP32-S3 SPI3, and ST7789 framebuffer output.
 
 ## Build
 
@@ -32,10 +32,13 @@ Successful base conformance requires:
 - TCA8418 configuration at address `0x34` and QMP-injected `A` press/release
   reaching the firmware through nINT, GPIO 11, the ESP-IDF ISR, and producing
   raw FIFO events `0x8d` and `0x0d` without polling;
+- a CPU-FIFO SPI3 transaction path that initializes the Cardputer ADV ST7789,
+  renders a deterministic red/blue 240x135 framebuffer, and emits
+  `SIM:DISPLAY controller=st7789 width=240 height=135 pattern=red-blue`;
 - `reset\n` producing a new boot sequence without replacing the flash image.
 
-Board-specific display, keyboard/button, PSRAM, power, and sensor fixtures will
-extend this base contract rather than weakening it.
+Board-specific keyboard/button, PSRAM, power, and sensor fixtures will extend
+this base contract rather than weakening it.
 
 From the repository root, exercise the built image through the real session
 service with:

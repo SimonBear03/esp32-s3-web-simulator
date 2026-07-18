@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from .boards import BoardProfile
 from .firmware import ValidatedFirmware, validate_and_pad_firmware, write_private_flash_image
+from .framebuffer import RGBFrame, parse_qemu_ppm
 from .inputs import qmp_key_event
 from .qemu import QemuWorkerConfig, build_qemu_command
 from .qmp import QmpUnavailableError, execute_qmp
@@ -187,6 +188,25 @@ class SessionManager:
         arguments = qmp_key_event(session.board, key, pressed)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "input-send-event", arguments)
+
+    async def capture_framebuffer(self, session_id: str) -> RGBFrame:
+        session = self.get(session_id)
+        if session.state is not SessionState.RUNNING:
+            raise RuntimeError("session framebuffer is not available")
+        if not self._settings.worker_qmp_enabled:
+            raise QmpUnavailableError("QMP framebuffer capture is disabled for this worker")
+
+        screenshot_path = session.runtime_directory / "framebuffer.ppm"
+        async with session.qmp_lock:
+            try:
+                await execute_qmp(
+                    session.qmp_socket_path,
+                    "screendump",
+                    {"filename": str(screenshot_path)},
+                )
+                return parse_qemu_ppm(screenshot_path.read_bytes())
+            finally:
+                screenshot_path.unlink(missing_ok=True)
 
     async def subscribe_serial(self, session_id: str) -> AsyncIterator[bytes]:
         session = self.get(session_id)

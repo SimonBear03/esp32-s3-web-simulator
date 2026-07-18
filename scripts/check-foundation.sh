@@ -18,7 +18,8 @@ for required_file in \
     emulator/qemu/version.json \
     emulator/qemu/patches/0001-m25p80-support-gigadevice-qe-status.patch \
     emulator/qemu/patches/0002-esp32s3-i2c-cardputer-tca8418.patch \
-    emulator/qemu/patches/0003-esp32s3-gpio-input-interrupts.patch
+    emulator/qemu/patches/0003-esp32s3-gpio-input-interrupts.patch \
+    emulator/qemu/patches/0004-esp32s3-gpspi-st7789.patch
 do
     if [ ! -s "$required_file" ]; then
         echo "missing required foundation file: $required_file" >&2

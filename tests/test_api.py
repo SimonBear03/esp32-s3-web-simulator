@@ -33,7 +33,7 @@ async def test_health_and_board_contract(tmp_path: Path) -> None:
 
         boards = (await client.get("/v1/boards")).json()
         assert [board["id"] for board in boards] == ["cardputer-adv", "sticks3"]
-        assert boards[0]["capabilities"][3]["fidelity"] == "planned"
+        assert boards[0]["capabilities"][3]["fidelity"] == "emulated"
         assert boards[0]["capabilities"][4]["fidelity"] == "emulated"
 
 

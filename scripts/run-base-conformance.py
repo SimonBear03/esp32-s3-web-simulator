@@ -63,10 +63,28 @@ async def run(args: argparse.Namespace) -> None:
             session = await manager.create(CARDPUTER_ADV, args.firmware.read_bytes())
             await wait_for_text(session, "SIM:TCA8418 address=0x34 cfg=0x01")
             await wait_for_text(session, "SIM:TCA8418_IRQ pin=11 mode=change")
+            await wait_for_text(
+                session,
+                "SIM:DISPLAY controller=st7789 width=240 height=135 pattern=red-blue",
+            )
             await wait_for_text(session, "SIM:READY")
             await wait_for_text(session, "SIM:HEARTBEAT", count=3)
 
             if args.qmp:
+                frame = await manager.capture_framebuffer(session.id)
+                if (frame.width, frame.height) != (240, 135):
+                    raise RuntimeError(
+                        f"unexpected Cardputer framebuffer size: {frame.width}x{frame.height}"
+                    )
+                if frame.pixel(0, 0) != (255, 0, 0):
+                    raise RuntimeError("Cardputer framebuffer top half is not red")
+                if frame.pixel(239, 66) != (255, 0, 0):
+                    raise RuntimeError("Cardputer framebuffer red boundary is incorrect")
+                if frame.pixel(0, 67) != (0, 0, 255):
+                    raise RuntimeError("Cardputer framebuffer blue boundary is incorrect")
+                if frame.pixel(239, 134) != (0, 0, 255):
+                    raise RuntimeError("Cardputer framebuffer bottom half is not blue")
+
                 await manager.send_key(session.id, "a", True)
                 await manager.send_key(session.id, "a", False)
                 await wait_for_text(session, "SIM:KEY raw=0x8d")

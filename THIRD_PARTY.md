@@ -10,6 +10,9 @@ updated before a new component or artifact is committed or distributed.
 | Espressif ESP32-S3 ROM image | From the pinned Espressif QEMU release | Separate Espressif terms; redistribution review pending | Not committed or redistributed. A local operator supplies an artifact obtained from Espressif. | First-stage boot ROM required by the QEMU machine |
 | PlatformIO Espressif32 / Arduino-ESP32 | Platform `6.12.0`; Arduino-ESP32 `2.0.17` | Apache-2.0 and component-specific notices | Build dependency only; generated packages and firmware are not committed | Builds the simulator-owned conformance firmware |
 | Texas Instruments TCA8418 documentation | TCA8418 datasheet, current design reference | TI documentation terms | Documentation is not copied or redistributed | Authoritative register and FIFO behavior for the original QEMU device model |
+| Sitronix ST7789 documentation | Public ST7789 controller documentation | Sitronix documentation terms | Documentation is not copied or redistributed | Command, address-window, color-mode, and framebuffer behavior for the original QEMU device model |
+| M5Stack hardware documentation | Cardputer ADV and StickS3 product documentation | M5Stack documentation terms | Documentation and product artwork are not copied or redistributed | Public pin assignments and visible display geometry |
+| M5Stack M5GFX library | Local reference snapshot; upstream MIT project | MIT | Not vendored; no source code copied | Cross-checks public ST7789 offsets and firmware-visible initialization behavior |
 | M5Stack M5Cardputer library | Reference commit `2d4fa6646e4e5b47e0af96214b003aa7b15b8d81` | MIT | Not vendored; no source code copied | Cross-checks public Cardputer keyboard layout and event remapping |
 | M5Stack device names | Cardputer ADV and StickS3 compatibility references | Third-party trademarks | Text compatibility references only; no official product artwork | Identifies target hardware profiles |
 

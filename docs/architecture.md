@@ -47,11 +47,13 @@ client-side WebAssembly engine can implement the same contract.
 - logical power/battery states and NVS
 - virtual BMI270 input after the base device is conformant
 
-## First Conformance Milestone
+## Application Compatibility Milestones
 
-Cardputer Chess is the first acceptance application. The simulator must boot
-its unmodified merged firmware, display the real UI, accept keyboard controls,
-preserve preferences across restarts, and support playing a complete game.
+Cardputer Chess is the first compatibility and stress application. The
+simulator should boot its unmodified merged firmware, display the real UI,
+accept keyboard controls, preserve preferences across restarts, and support
+playing a complete game. Because that application is in progress, it does not
+replace the simulator-owned conformance firmware as the release gate.
 
 The existing StickS3 companion is the second acceptance application for display,
 buttons, NVS, overlays, and graceful behavior when BLE is unavailable.

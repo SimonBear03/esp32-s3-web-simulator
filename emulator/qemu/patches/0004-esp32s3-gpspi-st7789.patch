@@ -1,0 +1,1000 @@
+diff --git a/hw/display/meson.build b/hw/display/meson.build
+index 36a9ace56ed59bcdc5b3c310b2771e59997820a4..aae9457eda23ffeb581134f658771cf0d9908d46 100644
+--- a/hw/display/meson.build
++++ b/hw/display/meson.build
+@@ -32,6 +32,7 @@ system_ss.add(when: 'CONFIG_CG3', if_true: files('cg3.c'))
+ system_ss.add(when: 'CONFIG_MACFB', if_true: files('macfb.c'))
+ system_ss.add(when: 'CONFIG_NEXTCUBE', if_true: files('next-fb.c'))
+ system_ss.add(when: 'CONFIG_ESP_RGB', if_true: files('esp_rgb.c'))
++system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files('st7789.c'))
+
+ system_ss.add(when: 'CONFIG_VGA', if_true: files('vga.c'))
+ system_ss.add(when: 'CONFIG_VIRTIO', if_true: files('virtio-dmabuf.c'))
+diff --git a/hw/display/st7789.c b/hw/display/st7789.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..afc6016d99a0a44fa412aee0708aa607b1106577
+--- /dev/null
++++ b/hw/display/st7789.c
+@@ -0,0 +1,404 @@
++/*
++ * Sitronix ST7789 LCD controller
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "qemu/osdep.h"
++#include "hw/display/st7789.h"
++#include "hw/qdev-properties.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++#include "qemu/module.h"
++#include "ui/console.h"
++#include "ui/pixel_ops.h"
++
++#define ST7789_GRAM_WIDTH 320
++#define ST7789_GRAM_HEIGHT 320
++#define ST7789_GRAM_PIXELS (ST7789_GRAM_WIDTH * ST7789_GRAM_HEIGHT)
++
++#define ST7789_CMD_SWRESET 0x01
++#define ST7789_CMD_RDDID 0x04
++#define ST7789_CMD_INVOFF 0x20
++#define ST7789_CMD_INVON 0x21
++#define ST7789_CMD_DISPOFF 0x28
++#define ST7789_CMD_DISPON 0x29
++#define ST7789_CMD_CASET 0x2a
++#define ST7789_CMD_RASET 0x2b
++#define ST7789_CMD_RAMWR 0x2c
++#define ST7789_CMD_MADCTL 0x36
++#define ST7789_CMD_COLMOD 0x3a
++#define ST7789_CMD_RAMWRC 0x3c
++
++#define ST7789_MADCTL_BGR BIT(3)
++
++typedef struct ST7789State {
++    SSIPeripheral parent_obj;
++    QemuConsole *console;
++
++    uint16_t visible_width;
++    uint16_t visible_height;
++    uint16_t offset_x;
++    uint16_t offset_y;
++
++    uint8_t command;
++    uint8_t parameter_index;
++    uint8_t parameters[4];
++    uint8_t pixel_high;
++    uint8_t read_index;
++    bool dc;
++    bool reset;
++    bool display_on;
++    bool inverse;
++    bool have_pixel_high;
++    bool redraw;
++
++    uint8_t madctl;
++    uint8_t colmod;
++    uint16_t column;
++    uint16_t column_start;
++    uint16_t column_end;
++    uint16_t row;
++    uint16_t row_start;
++    uint16_t row_end;
++    uint16_t gram[ST7789_GRAM_PIXELS];
++} ST7789State;
++
++OBJECT_DECLARE_SIMPLE_TYPE(ST7789State, ST7789)
++
++static void st7789_reset_state(ST7789State *s)
++{
++    s->command = 0;
++    s->parameter_index = 0;
++    s->pixel_high = 0;
++    s->read_index = 0;
++    s->display_on = false;
++    s->inverse = false;
++    s->have_pixel_high = false;
++    s->madctl = 0;
++    s->colmod = 0x55;
++    s->column = s->column_start = 0;
++    s->column_end = ST7789_GRAM_WIDTH - 1;
++    s->row = s->row_start = 0;
++    s->row_end = ST7789_GRAM_HEIGHT - 1;
++    memset(s->gram, 0, sizeof(s->gram));
++    s->redraw = true;
++}
++
++static void st7789_advance_pixel(ST7789State *s)
++{
++    if (s->column < s->column_end) {
++        s->column++;
++        return;
++    }
++    s->column = s->column_start;
++    if (s->row < s->row_end) {
++        s->row++;
++    } else {
++        s->row = s->row_start;
++    }
++}
++
++static void st7789_write_pixel_byte(ST7789State *s, uint8_t value)
++{
++    if (!s->have_pixel_high) {
++        s->pixel_high = value;
++        s->have_pixel_high = true;
++        return;
++    }
++
++    if (s->column < ST7789_GRAM_WIDTH && s->row < ST7789_GRAM_HEIGHT) {
++        s->gram[s->row * ST7789_GRAM_WIDTH + s->column] =
++            ((uint16_t)s->pixel_high << 8) | value;
++        s->redraw = true;
++    }
++    s->have_pixel_high = false;
++    st7789_advance_pixel(s);
++}
++
++static void st7789_apply_parameters(ST7789State *s)
++{
++    uint16_t start = ((uint16_t)s->parameters[0] << 8) | s->parameters[1];
++    uint16_t end = ((uint16_t)s->parameters[2] << 8) | s->parameters[3];
++
++    if (s->command == ST7789_CMD_CASET) {
++        s->column = s->column_start = MIN(start, ST7789_GRAM_WIDTH - 1);
++        s->column_end = MIN(end, ST7789_GRAM_WIDTH - 1);
++    } else {
++        s->row = s->row_start = MIN(start, ST7789_GRAM_HEIGHT - 1);
++        s->row_end = MIN(end, ST7789_GRAM_HEIGHT - 1);
++    }
++}
++
++static void st7789_write_data(ST7789State *s, uint8_t value)
++{
++    switch (s->command) {
++    case ST7789_CMD_CASET:
++    case ST7789_CMD_RASET:
++        s->parameters[s->parameter_index++] = value;
++        if (s->parameter_index == 4) {
++            st7789_apply_parameters(s);
++            s->parameter_index = 0;
++        }
++        break;
++    case ST7789_CMD_MADCTL:
++        s->madctl = value;
++        break;
++    case ST7789_CMD_COLMOD:
++        s->colmod = value;
++        break;
++    case ST7789_CMD_RAMWR:
++    case ST7789_CMD_RAMWRC:
++        st7789_write_pixel_byte(s, value);
++        break;
++    default:
++        break;
++    }
++}
++
++static void st7789_write_command(ST7789State *s, uint8_t command)
++{
++    s->command = command;
++    s->parameter_index = 0;
++    s->have_pixel_high = false;
++    s->read_index = 0;
++
++    switch (command) {
++    case ST7789_CMD_SWRESET:
++        st7789_reset_state(s);
++        break;
++    case ST7789_CMD_INVOFF:
++        s->inverse = false;
++        s->redraw = true;
++        break;
++    case ST7789_CMD_INVON:
++        s->inverse = true;
++        s->redraw = true;
++        break;
++    case ST7789_CMD_DISPOFF:
++        s->display_on = false;
++        s->redraw = true;
++        break;
++    case ST7789_CMD_DISPON:
++        s->display_on = true;
++        s->redraw = true;
++        break;
++    case ST7789_CMD_RAMWR:
++    case ST7789_CMD_RAMWRC:
++        s->column = s->column_start;
++        s->row = s->row_start;
++        break;
++    default:
++        break;
++    }
++}
++
++static uint32_t st7789_transfer(SSIPeripheral *device, uint32_t value)
++{
++    ST7789State *s = ST7789(device);
++
++    if (!s->reset) {
++        return 0;
++    }
++    if (!s->dc) {
++        st7789_write_command(s, value);
++        return 0;
++    }
++    if (s->command == ST7789_CMD_RDDID) {
++        static const uint8_t id[] = { 0x00, 0x85, 0x85, 0x52 };
++
++        return id[MIN(s->read_index++, ARRAY_SIZE(id) - 1)];
++    }
++    st7789_write_data(s, value);
++    return 0;
++}
++
++static void st7789_dc(void *opaque, int line, int level)
++{
++    ST7789State *s = ST7789(opaque);
++
++    s->dc = level;
++}
++
++static void st7789_reset(void *opaque, int line, int level)
++{
++    ST7789State *s = ST7789(opaque);
++
++    if (!level && s->reset) {
++        st7789_reset_state(s);
++    }
++    s->reset = level;
++}
++
++static void st7789_draw_pixel(DisplaySurface *surface, uint8_t *destination,
++                              uint16_t color, bool bgr, bool inverse)
++{
++    uint8_t red = ((color >> 11) & 0x1f) * 255 / 31;
++    uint8_t green = ((color >> 5) & 0x3f) * 255 / 63;
++    uint8_t blue = (color & 0x1f) * 255 / 31;
++    uint32_t pixel;
++
++    if (bgr) {
++        uint8_t swap = red;
++
++        red = blue;
++        blue = swap;
++    }
++    if (inverse) {
++        red = 255 - red;
++        green = 255 - green;
++        blue = 255 - blue;
++    }
++
++    switch (surface_bits_per_pixel(surface)) {
++    case 8:
++        *destination = rgb_to_pixel8(red, green, blue);
++        break;
++    case 15:
++        *(uint16_t *)destination = rgb_to_pixel15(red, green, blue);
++        break;
++    case 16:
++        *(uint16_t *)destination = rgb_to_pixel16(red, green, blue);
++        break;
++    case 24:
++        pixel = rgb_to_pixel24(red, green, blue);
++        destination[0] = pixel;
++        destination[1] = pixel >> 8;
++        destination[2] = pixel >> 16;
++        break;
++    case 32:
++        *(uint32_t *)destination = rgb_to_pixel32(red, green, blue);
++        break;
++    default:
++        break;
++    }
++}
++
++static void st7789_update_display(void *opaque)
++{
++    ST7789State *s = opaque;
++    DisplaySurface *surface = qemu_console_surface(s->console);
++    unsigned int bytes_per_pixel = (surface_bits_per_pixel(surface) + 7) / 8;
++
++    if (!s->redraw || !bytes_per_pixel) {
++        return;
++    }
++
++    for (unsigned int y = 0; y < s->visible_height; y++) {
++        uint8_t *destination = surface_data(surface) + y * surface_stride(surface);
++
++        for (unsigned int x = 0; x < s->visible_width; x++) {
++            unsigned int gram_x = s->offset_x + x;
++            unsigned int gram_y = s->offset_y + y;
++            uint16_t color = 0;
++
++            if (s->display_on && gram_x < ST7789_GRAM_WIDTH &&
++                gram_y < ST7789_GRAM_HEIGHT) {
++                color = s->gram[gram_y * ST7789_GRAM_WIDTH + gram_x];
++            }
++            st7789_draw_pixel(surface, destination + x * bytes_per_pixel,
++                              color, s->madctl & ST7789_MADCTL_BGR,
++                              s->display_on && s->inverse);
++        }
++    }
++    s->redraw = false;
++    dpy_gfx_update(s->console, 0, 0, s->visible_width, s->visible_height);
++}
++
++static void st7789_invalidate(void *opaque)
++{
++    ST7789State *s = opaque;
++
++    s->redraw = true;
++}
++
++static const GraphicHwOps st7789_graphic_ops = {
++    .invalidate = st7789_invalidate,
++    .gfx_update = st7789_update_display,
++};
++
++static void st7789_realize(SSIPeripheral *device, Error **errp)
++{
++    ST7789State *s = ST7789(device);
++    DeviceState *dev = DEVICE(device);
++
++    if (!s->visible_width || !s->visible_height ||
++        s->offset_x + s->visible_width > ST7789_GRAM_WIDTH ||
++        s->offset_y + s->visible_height > ST7789_GRAM_HEIGHT) {
++        error_setg(errp, "invalid ST7789 visible display geometry");
++        return;
++    }
++
++    s->console = graphic_console_init(dev, 0, &st7789_graphic_ops, s);
++    qemu_console_resize(s->console, s->visible_width, s->visible_height);
++    qdev_init_gpio_in_named(dev, st7789_dc, "dc", 1);
++    qdev_init_gpio_in_named(dev, st7789_reset, "reset", 1);
++    st7789_reset_state(s);
++}
++
++static const VMStateDescription vmstate_st7789 = {
++    .name = TYPE_ST7789,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT8(command, ST7789State),
++        VMSTATE_UINT8(parameter_index, ST7789State),
++        VMSTATE_UINT8_ARRAY(parameters, ST7789State, 4),
++        VMSTATE_UINT8(pixel_high, ST7789State),
++        VMSTATE_UINT8(read_index, ST7789State),
++        VMSTATE_BOOL(dc, ST7789State),
++        VMSTATE_BOOL(reset, ST7789State),
++        VMSTATE_BOOL(display_on, ST7789State),
++        VMSTATE_BOOL(inverse, ST7789State),
++        VMSTATE_BOOL(have_pixel_high, ST7789State),
++        VMSTATE_BOOL(redraw, ST7789State),
++        VMSTATE_UINT8(madctl, ST7789State),
++        VMSTATE_UINT8(colmod, ST7789State),
++        VMSTATE_UINT16(column, ST7789State),
++        VMSTATE_UINT16(column_start, ST7789State),
++        VMSTATE_UINT16(column_end, ST7789State),
++        VMSTATE_UINT16(row, ST7789State),
++        VMSTATE_UINT16(row_start, ST7789State),
++        VMSTATE_UINT16(row_end, ST7789State),
++        VMSTATE_UINT16_ARRAY(gram, ST7789State, ST7789_GRAM_PIXELS),
++        VMSTATE_SSI_PERIPHERAL(parent_obj, ST7789State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static Property st7789_properties[] = {
++    DEFINE_PROP_UINT16("visible-width", ST7789State, visible_width, 240),
++    DEFINE_PROP_UINT16("visible-height", ST7789State, visible_height, 320),
++    DEFINE_PROP_UINT16("offset-x", ST7789State, offset_x, 0),
++    DEFINE_PROP_UINT16("offset-y", ST7789State, offset_y, 0),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void st7789_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *sc = SSI_PERIPHERAL_CLASS(klass);
++
++    sc->realize = st7789_realize;
++    sc->transfer = st7789_transfer;
++    sc->cs_polarity = SSI_CS_LOW;
++    dc->vmsd = &vmstate_st7789;
++    device_class_set_props(dc, st7789_properties);
++    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
++}
++
++static const TypeInfo st7789_info = {
++    .name = TYPE_ST7789,
++    .parent = TYPE_SSI_PERIPHERAL,
++    .instance_size = sizeof(ST7789State),
++    .class_init = st7789_class_init,
++};
++
++static void st7789_register_types(void)
++{
++    type_register_static(&st7789_info);
++}
++
++type_init(st7789_register_types)
+diff --git a/hw/ssi/esp32s3_gpspi.c b/hw/ssi/esp32s3_gpspi.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..bd03b5103cf277ad222db77a360d4cf72df59a23
+--- /dev/null
++++ b/hw/ssi/esp32s3_gpspi.c
+@@ -0,0 +1,337 @@
++/*
++ * ESP32-S3 general-purpose SPI controller
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "qemu/osdep.h"
++#include "hw/irq.h"
++#include "hw/ssi/esp32s3_gpspi.h"
++#include "migration/vmstate.h"
++#include "qemu/log.h"
++#include "qemu/module.h"
++
++#define GPSPI_CMD 0x000
++#define GPSPI_ADDR 0x004
++#define GPSPI_CTRL 0x008
++#define GPSPI_CLOCK 0x00c
++#define GPSPI_USER 0x010
++#define GPSPI_USER1 0x014
++#define GPSPI_USER2 0x018
++#define GPSPI_MS_DLEN 0x01c
++#define GPSPI_MISC 0x020
++#define GPSPI_DMA_CONF 0x030
++#define GPSPI_DMA_INT_ENA 0x034
++#define GPSPI_DMA_INT_CLR 0x038
++#define GPSPI_DMA_INT_RAW 0x03c
++#define GPSPI_DMA_INT_ST 0x040
++#define GPSPI_DMA_INT_SET 0x044
++#define GPSPI_W0 0x098
++#define GPSPI_W15 0x0d4
++#define GPSPI_SLAVE 0x0e0
++#define GPSPI_CLK_GATE 0x0e8
++
++#define GPSPI_CMD_USR BIT(24)
++#define GPSPI_CMD_UPDATE BIT(23)
++#define GPSPI_USER_COMMAND BIT(31)
++#define GPSPI_USER_ADDR BIT(30)
++#define GPSPI_USER_DUMMY BIT(29)
++#define GPSPI_USER_MISO BIT(28)
++#define GPSPI_USER_MOSI BIT(27)
++#define GPSPI_MISC_CS_KEEP_ACTIVE BIT(30)
++#define GPSPI_MISC_CS0_DISABLE BIT(0)
++#define GPSPI_INT_TRANS_DONE BIT(12)
++
++static void esp32s3_gpspi_update_irq(ESP32S3GpspiState *s)
++{
++    qemu_set_irq(s->irq, !!(s->dma_int_raw & s->dma_int_ena));
++}
++
++static void esp32s3_gpspi_set_cs(ESP32S3GpspiState *s, bool high)
++{
++    if (s->misc & GPSPI_MISC_CS0_DISABLE) {
++        qemu_set_irq(s->cs[0], 1);
++        return;
++    }
++    qemu_set_irq(s->cs[0], high);
++}
++
++static void esp32s3_gpspi_transfer_bytes(ESP32S3GpspiState *s,
++                                         const uint8_t *tx, uint8_t *rx,
++                                         unsigned int count)
++{
++    for (unsigned int index = 0; index < count; index++) {
++        uint32_t received = ssi_transfer(s->spi, tx ? tx[index] : 0);
++
++        if (rx) {
++            rx[index] = received;
++        }
++    }
++}
++
++static void esp32s3_gpspi_transaction(ESP32S3GpspiState *s)
++{
++    unsigned int data_bytes = ((s->ms_dlen & 0x3ffff) + 8) / 8;
++    uint8_t *data = (uint8_t *)s->data;
++
++    data_bytes = MIN(data_bytes, sizeof(s->data));
++    esp32s3_gpspi_set_cs(s, false);
++
++    if (s->user & GPSPI_USER_COMMAND) {
++        unsigned int bits = ((s->user2 >> 28) & 0xf) + 1;
++        unsigned int bytes = (bits + 7) / 8;
++        uint16_t command = s->user2 & 0xffff;
++
++        esp32s3_gpspi_transfer_bytes(s, (uint8_t *)&command, NULL, bytes);
++    }
++
++    if (s->user & GPSPI_USER_ADDR) {
++        unsigned int bits = ((s->user1 >> 27) & 0x1f) + 1;
++        unsigned int bytes = (bits + 7) / 8;
++        uint32_t address = bswap32(s->addr);
++
++        if (bytes < sizeof(address)) {
++            address >>= (sizeof(address) - bytes) * 8;
++        }
++        esp32s3_gpspi_transfer_bytes(s, (uint8_t *)&address, NULL, bytes);
++    }
++
++    if (s->user & GPSPI_USER_DUMMY) {
++        unsigned int cycles = (s->user1 & 0xff) + 1;
++        unsigned int bytes = (cycles + 7) / 8;
++
++        esp32s3_gpspi_transfer_bytes(s, NULL, NULL, bytes);
++    }
++
++    if ((s->user & GPSPI_USER_MOSI) || (s->user & GPSPI_USER_MISO)) {
++        esp32s3_gpspi_transfer_bytes(
++            s,
++            s->user & GPSPI_USER_MOSI ? data : NULL,
++            s->user & GPSPI_USER_MISO ? data : NULL,
++            data_bytes);
++    }
++
++    if (!(s->misc & GPSPI_MISC_CS_KEEP_ACTIVE)) {
++        esp32s3_gpspi_set_cs(s, true);
++    }
++    s->dma_int_raw |= GPSPI_INT_TRANS_DONE;
++    esp32s3_gpspi_update_irq(s);
++}
++
++static uint64_t esp32s3_gpspi_read(void *opaque, hwaddr addr,
++                                   unsigned int size)
++{
++    ESP32S3GpspiState *s = ESP32S3_GPSPI(opaque);
++
++    switch (addr) {
++    case GPSPI_CMD:
++        return 0;
++    case GPSPI_ADDR:
++        return s->addr;
++    case GPSPI_CTRL:
++        return s->ctrl;
++    case GPSPI_CLOCK:
++        return s->clock;
++    case GPSPI_USER:
++        return s->user;
++    case GPSPI_USER1:
++        return s->user1;
++    case GPSPI_USER2:
++        return s->user2;
++    case GPSPI_MS_DLEN:
++        return s->ms_dlen;
++    case GPSPI_MISC:
++        return s->misc;
++    case GPSPI_DMA_CONF:
++        return s->dma_conf;
++    case GPSPI_DMA_INT_ENA:
++        return s->dma_int_ena;
++    case GPSPI_DMA_INT_CLR:
++        return 0;
++    case GPSPI_DMA_INT_RAW:
++        return s->dma_int_raw;
++    case GPSPI_DMA_INT_ST:
++        return s->dma_int_raw & s->dma_int_ena;
++    case GPSPI_DMA_INT_SET:
++        return 0;
++    case GPSPI_W0 ... GPSPI_W15:
++        return s->data[(addr - GPSPI_W0) / sizeof(uint32_t)];
++    case GPSPI_SLAVE:
++        return s->slave;
++    case GPSPI_CLK_GATE:
++        return s->clk_gate;
++    default:
++        qemu_log_mask(LOG_UNIMP,
++                      "%s: unimplemented read at 0x%03" HWADDR_PRIx "\n",
++                      TYPE_ESP32S3_GPSPI, addr);
++        return 0;
++    }
++}
++
++static void esp32s3_gpspi_write(void *opaque, hwaddr addr, uint64_t value,
++                                unsigned int size)
++{
++    ESP32S3GpspiState *s = ESP32S3_GPSPI(opaque);
++    uint32_t word = value;
++
++    switch (addr) {
++    case GPSPI_CMD:
++        if (word & GPSPI_CMD_USR) {
++            esp32s3_gpspi_transaction(s);
++        }
++        /* UPDATE and USR complete synchronously in this functional model. */
++        break;
++    case GPSPI_ADDR:
++        s->addr = word;
++        break;
++    case GPSPI_CTRL:
++        s->ctrl = word;
++        break;
++    case GPSPI_CLOCK:
++        s->clock = word;
++        break;
++    case GPSPI_USER:
++        s->user = word;
++        break;
++    case GPSPI_USER1:
++        s->user1 = word;
++        break;
++    case GPSPI_USER2:
++        s->user2 = word;
++        break;
++    case GPSPI_MS_DLEN:
++        s->ms_dlen = word;
++        break;
++    case GPSPI_MISC:
++        s->misc = word;
++        break;
++    case GPSPI_DMA_CONF:
++        s->dma_conf = word;
++        break;
++    case GPSPI_DMA_INT_ENA:
++        s->dma_int_ena = word;
++        esp32s3_gpspi_update_irq(s);
++        break;
++    case GPSPI_DMA_INT_CLR:
++        s->dma_int_raw &= ~word;
++        esp32s3_gpspi_update_irq(s);
++        break;
++    case GPSPI_DMA_INT_RAW:
++        s->dma_int_raw &= ~word;
++        esp32s3_gpspi_update_irq(s);
++        break;
++    case GPSPI_DMA_INT_ST:
++        break;
++    case GPSPI_DMA_INT_SET:
++        s->dma_int_raw |= word;
++        esp32s3_gpspi_update_irq(s);
++        break;
++    case GPSPI_W0 ... GPSPI_W15:
++        s->data[(addr - GPSPI_W0) / sizeof(uint32_t)] = word;
++        break;
++    case GPSPI_SLAVE:
++        s->slave = word;
++        break;
++    case GPSPI_CLK_GATE:
++        s->clk_gate = word;
++        break;
++    default:
++        qemu_log_mask(LOG_UNIMP,
++                      "%s: unimplemented write at 0x%03" HWADDR_PRIx
++                      " value=0x%08x\n",
++                      TYPE_ESP32S3_GPSPI, addr, word);
++        break;
++    }
++}
++
++static const MemoryRegionOps esp32s3_gpspi_ops = {
++    .read = esp32s3_gpspi_read,
++    .write = esp32s3_gpspi_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++};
++
++static void esp32s3_gpspi_reset_hold(Object *obj, ResetType type)
++{
++    ESP32S3GpspiState *s = ESP32S3_GPSPI(obj);
++
++    s->addr = 0;
++    s->ctrl = BIT(21) | BIT(20) | BIT(19) | BIT(18);
++    s->clock = BIT(31);
++    s->user = GPSPI_USER_COMMAND;
++    s->user1 = 23 << 27;
++    s->user2 = 7 << 28;
++    s->ms_dlen = 0;
++    s->misc = 0x3e;
++    s->dma_conf = 0;
++    s->dma_int_ena = 0;
++    s->dma_int_raw = 0;
++    memset(s->data, 0, sizeof(s->data));
++    s->slave = 0;
++    s->clk_gate = 0;
++    esp32s3_gpspi_set_cs(s, true);
++    esp32s3_gpspi_update_irq(s);
++}
++
++static const VMStateDescription vmstate_esp32s3_gpspi = {
++    .name = TYPE_ESP32S3_GPSPI,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT32(addr, ESP32S3GpspiState),
++        VMSTATE_UINT32(ctrl, ESP32S3GpspiState),
++        VMSTATE_UINT32(clock, ESP32S3GpspiState),
++        VMSTATE_UINT32(user, ESP32S3GpspiState),
++        VMSTATE_UINT32(user1, ESP32S3GpspiState),
++        VMSTATE_UINT32(user2, ESP32S3GpspiState),
++        VMSTATE_UINT32(ms_dlen, ESP32S3GpspiState),
++        VMSTATE_UINT32(misc, ESP32S3GpspiState),
++        VMSTATE_UINT32(dma_conf, ESP32S3GpspiState),
++        VMSTATE_UINT32(dma_int_ena, ESP32S3GpspiState),
++        VMSTATE_UINT32(dma_int_raw, ESP32S3GpspiState),
++        VMSTATE_UINT32_ARRAY(data, ESP32S3GpspiState,
++                             ESP32S3_GPSPI_BUFFER_WORDS),
++        VMSTATE_UINT32(slave, ESP32S3GpspiState),
++        VMSTATE_UINT32(clk_gate, ESP32S3GpspiState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void esp32s3_gpspi_init(Object *obj)
++{
++    ESP32S3GpspiState *s = ESP32S3_GPSPI(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++
++    memory_region_init_io(&s->iomem, obj, &esp32s3_gpspi_ops, s,
++                          TYPE_ESP32S3_GPSPI, ESP32S3_GPSPI_IO_SIZE);
++    sysbus_init_mmio(sbd, &s->iomem);
++    sysbus_init_irq(sbd, &s->irq);
++    s->spi = ssi_create_bus(DEVICE(s), "spi");
++    qdev_init_gpio_out_named(DEVICE(s), s->cs, SSI_GPIO_CS,
++                             ESP32S3_GPSPI_CS_COUNT);
++}
++
++static void esp32s3_gpspi_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    ResettableClass *rc = RESETTABLE_CLASS(klass);
++
++    rc->phases.hold = esp32s3_gpspi_reset_hold;
++    dc->vmsd = &vmstate_esp32s3_gpspi;
++}
++
++static const TypeInfo esp32s3_gpspi_info = {
++    .name = TYPE_ESP32S3_GPSPI,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(ESP32S3GpspiState),
++    .instance_init = esp32s3_gpspi_init,
++    .class_init = esp32s3_gpspi_class_init,
++};
++
++static void esp32s3_gpspi_register_types(void)
++{
++    type_register_static(&esp32s3_gpspi_info);
++}
++
++type_init(esp32s3_gpspi_register_types)
+diff --git a/hw/ssi/meson.build b/hw/ssi/meson.build
+index 30f1a871af558056b8e320b3c0c426fd0d329726..8b551ebb6a12cb7157a15641e39b52828f9c88e2 100644
+--- a/hw/ssi/meson.build
++++ b/hw/ssi/meson.build
+@@ -12,7 +12,7 @@ system_ss.add(when: 'CONFIG_XLNX_VERSAL', if_true: files('xlnx-versal-ospi.c'))
+ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_spi.c'))
+ system_ss.add(when: 'CONFIG_XTENSA_ESP32', if_true: files('esp32_spi.c'))
+ system_ss.add(when: 'CONFIG_RISCV_ESP32C3', if_true: files('esp32c3_spi.c'))
+-system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files('esp32s3_spi.c'))
++system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files('esp32s3_spi.c', 'esp32s3_gpspi.c'))
+ system_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_spi_host.c'))
+ system_ss.add(when: 'CONFIG_BCM2835_SPI', if_true: files('bcm2835_spi.c'))
+ system_ss.add(when: 'CONFIG_PNV_SPI', if_true: files('pnv_spi.c'))
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+index 5367df9a10ede204cae61b548de7c0bd27196fd2..237e5ef3f25d911bdfda28a5284fb6b9275f8475 100644
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -46,6 +46,7 @@
+ #include "elf.h"
+
+ #include "hw/ssi/esp32s3_spi.h"
++#include "hw/ssi/esp32s3_gpspi.h"
+ #include "hw/misc/esp32s3_cache.h"
+ #include "hw/char/esp32s3_uart.h"
+ #include "hw/misc/esp32s3_rng.h"
+@@ -61,6 +62,7 @@
+ #include "hw/timer/esp32s3_timg.h"
+ #include "hw/timer/esp32s3_systimer.h"
+ #include "hw/gpio/esp32s3_gpio.h"
++#include "hw/display/st7789.h"
+ #include "hw/i2c/esp32_i2c.h"
+ #include "hw/input/tca8418.h"
+ #include "hw/misc/esp32s3_xts_aes.h"
+@@ -125,6 +127,7 @@ typedef struct Esp32s3SocState {
+     Esp32s3IntMatrixState intmatrix;
+     ESP32S3UARTState uart[ESP32S3_UART_COUNT];
+     Esp32I2CState i2c[ESP32S3_I2C_COUNT];
++    ESP32S3GpspiState gpspi[2];
+     ESP32S3GPIOState gpio;
+     Esp32s3RngState rng;
+     Esp32S3TWAIState twai;
+@@ -217,6 +220,9 @@ static void esp32s3_soc_reset(DeviceState *dev)
+         for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
+             device_cold_reset(DEVICE(&s->i2c[i]));
+         }
++        for (int i = 0; i < ARRAY_SIZE(s->gpspi); ++i) {
++            device_cold_reset(DEVICE(&s->gpspi[i]));
++        }
+     }
+     if (s->requested_reset & ESP32S3_SOC_RESET_PROCPU) {
+         xtensa_select_static_vectors(&s->cpu[0].env, s->rtc_cntl.stat_vector_sel[0]);
+@@ -443,6 +449,16 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
+                                             ETS_I2C_EXT0_INTR_SOURCE + i));
+     }
+
++    for (int i = 0; i < ARRAY_SIZE(s->gpspi); ++i) {
++        const hwaddr gpspi_base[] = { DR_REG_SPI2_BASE, DR_REG_SPI3_BASE };
++
++        qdev_realize(DEVICE(&s->gpspi[i]), &s->periph_bus, &error_fatal);
++        esp32s3_soc_add_periph_device(sys_mem, &s->gpspi[i], gpspi_base[i]);
++        sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpspi[i]), 0,
++                           qdev_get_gpio_in(intmatrix_dev,
++                                            ETS_SPI2_INTR_SOURCE + i));
++    }
++
+     qdev_realize(DEVICE(&s->sdmmc), &s->periph_bus, &error_fatal);
+     esp32s3_soc_add_periph_device(sys_mem, &s->sdmmc, DR_REG_SDMMC_BASE);
+     sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdmmc), 0,
+@@ -556,6 +572,11 @@ static void esp32s3_soc_init(Object *obj)
+         qdev_prop_set_bit(DEVICE(&s->i2c[i]), "s3-mode", true);
+     }
+
++    for (int i = 0; i < ARRAY_SIZE(s->gpspi); ++i) {
++        snprintf(name, sizeof(name), "gpspi%d", i + 2);
++        object_initialize_child(obj, name, &s->gpspi[i], TYPE_ESP32S3_GPSPI);
++    }
++
+     object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev");
+     object_property_add_alias(obj, "serial1", OBJECT(&s->uart[1]), "chardev");
+     // object_property_add_alias(obj, "serial2", OBJECT(&s->uart[2]), "chardev");
+@@ -653,17 +674,64 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+     I2CBus *i2c_bus;
+     I2CSlave *keyboard;
+     qemu_irq keyboard_irq;
+-
+-    if (strcmp(ms->board_profile, "cardputer-adv")) {
++    DeviceState *display;
++    qemu_irq display_dc;
++    qemu_irq display_reset;
++    uint16_t display_width;
++    uint16_t display_height;
++    uint16_t display_offset_x;
++    uint16_t display_offset_y;
++    unsigned int dc_pin;
++    unsigned int reset_pin;
++
++    if (strcmp(ms->board_profile, "cardputer-adv") &&
++        strcmp(ms->board_profile, "sticks3")) {
+         return;
+     }
+
+-    i2c_master = DEVICE(&soc->i2c[0]);
+-    i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
+-    keyboard = i2c_slave_create_simple(i2c_bus, TYPE_TCA8418, 0x34);
+-    keyboard_irq = qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 11);
+-    qdev_connect_gpio_out_named(DEVICE(keyboard), "nINT", 0, keyboard_irq);
+-    qemu_set_irq(keyboard_irq, 1);
++    if (!strcmp(ms->board_profile, "cardputer-adv")) {
++        i2c_master = DEVICE(&soc->i2c[0]);
++        i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
++        keyboard = i2c_slave_create_simple(i2c_bus, TYPE_TCA8418, 0x34);
++        keyboard_irq = qdev_get_gpio_in_named(DEVICE(&soc->gpio),
++                                               "gpio-in", 11);
++        qdev_connect_gpio_out_named(DEVICE(keyboard), "nINT", 0,
++                                    keyboard_irq);
++        qemu_set_irq(keyboard_irq, 1);
++
++        display_width = 240;
++        display_height = 135;
++        display_offset_x = 40;
++        display_offset_y = 53;
++        dc_pin = 34;
++        reset_pin = 33;
++    } else {
++        display_width = 135;
++        display_height = 240;
++        display_offset_x = 52;
++        display_offset_y = 40;
++        dc_pin = 45;
++        reset_pin = 21;
++    }
++
++    display = qdev_new(TYPE_ST7789);
++    qdev_prop_set_uint16(display, "visible-width", display_width);
++    qdev_prop_set_uint16(display, "visible-height", display_height);
++    qdev_prop_set_uint16(display, "offset-x", display_offset_x);
++    qdev_prop_set_uint16(display, "offset-y", display_offset_y);
++    ssi_realize_and_unref(display, soc->gpspi[1].spi, &error_fatal);
++    qdev_connect_gpio_out_named(DEVICE(&soc->gpspi[1]), SSI_GPIO_CS, 0,
++                                qdev_get_gpio_in_named(display, SSI_GPIO_CS, 0));
++    qemu_set_irq(qdev_get_gpio_in_named(display, SSI_GPIO_CS, 0), 1);
++
++    display_dc = qdev_get_gpio_in_named(display, "dc", 0);
++    display_reset = qdev_get_gpio_in_named(display, "reset", 0);
++    qdev_connect_gpio_out_named(DEVICE(&soc->gpio), "gpio-out", dc_pin,
++                                display_dc);
++    qdev_connect_gpio_out_named(DEVICE(&soc->gpio), "gpio-out", reset_pin,
++                                display_reset);
++    qemu_set_irq(display_dc, 0);
++    qemu_set_irq(display_reset, 1);
+ }
+
+ static void esp32s3_machine_init(MachineState *machine)
+@@ -722,7 +790,9 @@ static void esp32s3_machine_init(MachineState *machine)
+     object_initialize_child(OBJECT(ss), "timg0", &ss->timg[0], TYPE_ESP32S3_TIMG);
+     object_initialize_child(OBJECT(ss), "timg1", &ss->timg[1], TYPE_ESP32S3_TIMG);
+     object_initialize_child(OBJECT(ss), "systimer", &ss->systimer, TYPE_ESP32S3_SYSTIMER);
+-    object_initialize_child(OBJECT(ss), "rgb", &ss->rgb, TYPE_ESP_RGB);
++    if (!strcmp(ms->board_profile, "none")) {
++        object_initialize_child(OBJECT(ss), "rgb", &ss->rgb, TYPE_ESP_RGB);
++    }
+
+     DeviceState* intmatrix_dev = DEVICE(&ss->intmatrix);
+     {
+@@ -928,8 +998,8 @@ static void esp32s3_machine_init(MachineState *machine)
+         memory_region_add_subregion_overlap(sys_mem, DR_REG_AES_XTS_BASE, mr, 0);
+     }
+
+-    /* RGB display realization */
+-    {
++    /* The generic RGB helper is replaced by the physical board display. */
++    if (!strcmp(ms->board_profile, "none")) {
+         /* Give the internal RAM memory region to the display */
+         ss->rgb.intram = dram;
+         sysbus_realize(SYS_BUS_DEVICE(&ss->rgb), &error_fatal);
+diff --git a/include/hw/display/st7789.h b/include/hw/display/st7789.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..1b2f92e96ec783ad4fc91c11ecc52244e429af83
+--- /dev/null
++++ b/include/hw/display/st7789.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#ifndef HW_DISPLAY_ST7789_H
++#define HW_DISPLAY_ST7789_H
++
++#define TYPE_ST7789 "st7789"
++
++#endif
+diff --git a/include/hw/ssi/esp32s3_gpspi.h b/include/hw/ssi/esp32s3_gpspi.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..abab879bc5bd7c7af47dd0d2100d4637e8aadbbb
+--- /dev/null
++++ b/include/hw/ssi/esp32s3_gpspi.h
+@@ -0,0 +1,40 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#ifndef HW_SSI_ESP32S3_GPSPI_H
++#define HW_SSI_ESP32S3_GPSPI_H
++
++#include "hw/ssi/ssi.h"
++#include "hw/sysbus.h"
++
++#define TYPE_ESP32S3_GPSPI "ssi.esp32s3.gpspi"
++OBJECT_DECLARE_SIMPLE_TYPE(ESP32S3GpspiState, ESP32S3_GPSPI)
++
++#define ESP32S3_GPSPI_CS_COUNT 6
++#define ESP32S3_GPSPI_BUFFER_WORDS 16
++#define ESP32S3_GPSPI_IO_SIZE 0x400
++
++struct ESP32S3GpspiState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion iomem;
++    SSIBus *spi;
++    qemu_irq irq;
++    qemu_irq cs[ESP32S3_GPSPI_CS_COUNT];
++
++    uint32_t addr;
++    uint32_t ctrl;
++    uint32_t clock;
++    uint32_t user;
++    uint32_t user1;
++    uint32_t user2;
++    uint32_t ms_dlen;
++    uint32_t misc;
++    uint32_t dma_conf;
++    uint32_t dma_int_ena;
++    uint32_t dma_int_raw;
++    uint32_t data[ESP32S3_GPSPI_BUFFER_WORDS];
++    uint32_t slave;
++    uint32_t clk_gate;
++};
++
++#endif

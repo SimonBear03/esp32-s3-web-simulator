@@ -20,8 +20,11 @@ Active implementation. The server-side worker boots real merged ESP32-S3 flash
 images, preserves private flash/NVS state for a session, streams bidirectional
 UART, and supports reset and bounded worker lifecycles. The Cardputer ADV model
 now includes the ESP32-S3 I2C path and a TCA8418 keyboard FIFO with typed web
-input translated through QMP. Display, GPIO interrupt, power, sensor, debugger,
-and hosted-web milestones remain in progress.
+input translated through QMP. Cardputer ADV and StickS3 now have SPI3/ST7789
+display models with correctly sized RGB framebuffers; the Cardputer path is
+covered by real compiled firmware and exact pixel assertions. Power, sensor,
+debugger, continuous web-frame streaming, and hosted-web milestones remain in
+progress.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. A successful first
@@ -49,7 +52,7 @@ licensing boundaries.
 ## Development
 
 The emulator baseline is Espressif QEMU 9.2.2 built from a pinned source commit
-with a tracked ESP-IDF 4.4 flash-compatibility patch. See
+with tracked flash, I2C, GPIO, keyboard, SPI, and display patches. See
 [emulator/qemu/README.md](emulator/qemu/README.md) for native prerequisites and
 the reproducible build command.
 
@@ -77,6 +80,5 @@ suite. The versioned browser/service contract is documented in
 
 ## Licence
 
-The project is intended to remain open source. The component-level licensing
-plan must be finalized before implementation code is imported or published;
-until then, no licence is granted beyond applicable law.
+The project is open source under GPL-2.0-only. Third-party components and
+runtime artifacts retain their own terms as documented above.

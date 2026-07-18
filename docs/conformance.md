@@ -10,9 +10,9 @@ and build recipe will be pinned; generated binaries will remain untracked.
 The base fixture lives at `tests/firmware/conformance/`. Board-specific
 fixtures will build on its stable `SIM:` UART contract.
 
-The 2026-07-19 keyboard-capable base build produced unpadded merged-image
+The 2026-07-19 display-capable base build produced unpadded merged-image
 SHA-256
-`6d3f125e32121aee76a601f12062381f8b32de0e11b41fa8e7c47c8465757dfb`.
+`3ce37d44625fe0ddc400856d2c6964559878a020d482ed8a2eb525d4f73688cf`.
 The service conformance runner observed TCA8418 configuration at I2C address
 `0x34`, ESP-IDF `CHANGE` interrupt registration on GPIO 11, three heartbeats,
 `SIM:PONG`, a software reset, a second boot, NVS incrementing from 1 to 2,
@@ -28,6 +28,16 @@ This proves the host event, QMP, board mapping, TCA8418 nINT, GPIO 11 edge,
 ESP-IDF ISR, I2C controller, device register, and firmware-read path end to end.
 The service runner performs these same assertions automatically when its normal
 private QMP socket is available.
+
+The same owned firmware initializes ESP-IDF SPI3 without DMA, programs the
+ST7789 visible window at controller coordinates `(40,53)` through `(279,187)`,
+and writes all 32,400 visible pixels. QMP captured a P6 RGB framebuffer of
+exactly 240x135. Independent host assertions found red `(255,0,0)` at `(0,0)`
+and `(239,66)`, then blue `(0,0,255)` at `(0,67)` and `(239,134)`. The service
+runner now performs these dimension and boundary-pixel assertions through its
+private QMP socket. This proves the ESP-IDF SPI driver, ESP32-S3 general-purpose
+SPI register model, ST7789 command/data model, visible crop, QEMU console, and
+service parser end to end.
 
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.
@@ -58,10 +68,10 @@ last application-owned line was:
 ```
 
 QEMU then exited only because the test harness sent its timeout signal. This
-proves the GigaDevice QE patch fixes the flash-initialization blocker. It does
-not prove Cardputer ADV display compatibility. Keyboard compatibility is now
-covered independently by the simulator-owned fixture and explicit I2C/TCA8418
-models rather than inferred from the application snapshot.
+proves the GigaDevice QE patch fixes the flash-initialization blocker. It did
+not prove Cardputer ADV display compatibility. Keyboard and display
+compatibility are now covered independently by the simulator-owned fixture and
+explicit board models rather than inferred from the application snapshot.
 
 The same snapshot was then run for four seconds through the public service's
 `SessionManager`, with guest networking disabled and native worker resource
@@ -88,7 +98,11 @@ default and must be live-tested in the deployment boundary.
   defines the ESP32-S3, display, I2C, TCA8418, and interrupt pin assignment.
 - [Texas Instruments TCA8418 datasheet](https://www.ti.com/lit/ds/symlink/tca8418.pdf)
   defines the `0x34` address, 10-event FIFO, register map, and press bit.
+- [M5Stack StickS3 documentation](https://docs.m5stack.com/zh_CN/core/StickS3)
+  defines the StickS3 display geometry and pins.
 - [Espressif QEMU supported-feature matrix](https://github.com/espressif/esp-toolchain-docs/blob/main/qemu/README.md#supported-features)
   is the upstream baseline; this repository documents every additional patch.
 - [ESP-IDF ESP32-S3 I2C API](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/peripherals/i2c.html)
   anchors the firmware-facing controller behavior.
+- [ESP-IDF ESP32-S3 SPI master API](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/peripherals/spi_master.html)
+  anchors the SPI3 transaction and completion behavior.

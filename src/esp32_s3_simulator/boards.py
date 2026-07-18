@@ -59,7 +59,12 @@ CARDPUTER_ADV = BoardProfile(
         Capability("cpu", "ESP32-S3 CPU and boot", Fidelity.EMULATED, "Espressif QEMU"),
         Capability("flash", "8 MiB SPI flash", Fidelity.EMULATED, "Patched GigaDevice QE path"),
         Capability("serial", "UART console", Fidelity.EMULATED, "Bidirectional byte stream"),
-        Capability("display", "ST7789 display", Fidelity.PLANNED, "SPI board model required"),
+        Capability(
+            "display",
+            "ST7789 display",
+            Fidelity.EMULATED,
+            "SPI3 command/data model with RGB framebuffer capture",
+        ),
         Capability(
             "keyboard",
             "TCA8418 keyboard",
@@ -91,7 +96,12 @@ STICKS3 = BoardProfile(
         Capability("flash", "8 MiB SPI flash", Fidelity.EMULATED, "Patched GigaDevice QE path"),
         Capability("psram", "8 MiB PSRAM", Fidelity.EMULATED, "QEMU SPI PSRAM model"),
         Capability("serial", "UART console", Fidelity.EMULATED, "Bidirectional byte stream"),
-        Capability("display", "ST7789 display", Fidelity.PLANNED, "SPI board model required"),
+        Capability(
+            "display",
+            "ST7789 display",
+            Fidelity.EMULATED,
+            "SPI3 command/data model with RGB framebuffer capture",
+        ),
         Capability("buttons", "Physical buttons", Fidelity.PLANNED, "GPIO injection required"),
         Capability("imu", "BMI270 IMU", Fidelity.PLANNED, "Scripted behavioral sensor model"),
         Capability("power", "Battery and power states", Fidelity.PLANNED, "Behavioral model"),
