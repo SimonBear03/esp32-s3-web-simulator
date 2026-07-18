@@ -21,10 +21,11 @@ images, preserves private flash/NVS state for a session, streams bidirectional
 UART, and supports reset and bounded worker lifecycles. The Cardputer ADV model
 now includes the ESP32-S3 I2C path and a TCA8418 keyboard FIFO with typed web
 input translated through QMP. Cardputer ADV and StickS3 now have SPI3/ST7789
-display models with correctly sized RGB framebuffers; the Cardputer path is
-covered by real compiled firmware and exact pixel assertions. Power, sensor,
-debugger, continuous web-frame streaming, and hosted-web milestones remain in
-progress.
+display models with correctly sized RGB framebuffers and live binary WebSocket
+streaming. Both profiles are covered by real compiled firmware, exact pixel
+assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
+passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
+debugger, and hosted-web milestones remain in progress.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. A successful first
@@ -52,7 +53,7 @@ licensing boundaries.
 ## Development
 
 The emulator baseline is Espressif QEMU 9.2.2 built from a pinned source commit
-with tracked flash, I2C, GPIO, keyboard, SPI, and display patches. See
+with tracked flash, I2C, GPIO, keyboard, SPI, display, and octal-PSRAM patches. See
 [emulator/qemu/README.md](emulator/qemu/README.md) for native prerequisites and
 the reproducible build command.
 

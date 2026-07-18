@@ -30,6 +30,12 @@ The Cardputer ADV profile exposes a cropped 240x135 framebuffer and the StickS3
 profile exposes 135x240. QMP `screendump` captures the physical board display;
 the generic 800x600 helper is retained only for the profile-free machine.
 
+`patches/0005-esp32s3-sticks3-octal-psram-qio.patch` selects the existing octal
+PSRAM command model for the StickS3 profile and adapts ESP32-S3 quad-I/O read
+dummy cycles to QEMU's serialized GigaDevice flash model. It also fixes the SPI
+transfer-buffer index checks. The owned StickS3 fixture validates the real
+`qio_opi` configuration with exact 8 MiB PSRAM and NVS readback across reset.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:

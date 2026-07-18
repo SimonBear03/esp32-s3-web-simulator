@@ -4,7 +4,7 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from esp32_s3_simulator.api import KeyInputMessage, create_app
+from esp32_s3_simulator.api import KeyInputMessage, SessionControlMessage, create_app
 from esp32_s3_simulator.settings import Settings
 
 
@@ -41,6 +41,7 @@ def test_input_message_contract_rejects_untyped_payloads() -> None:
     assert KeyInputMessage.model_validate(
         {"type": "key", "key": "a", "pressed": True, "sequence": 12}
     ).sequence == 12
+    assert SessionControlMessage.model_validate({"action": "pause"}).action == "pause"
 
 
 async def test_session_creation_fails_closed_without_worker(tmp_path: Path) -> None:
@@ -60,3 +61,24 @@ async def test_session_creation_fails_closed_without_worker(tmp_path: Path) -> N
 
     assert response.status_code == 503
     assert response.json()["detail"] == "native QEMU workers are not configured and enabled"
+
+
+async def test_session_control_contract_rejects_invalid_or_missing_sessions(
+    tmp_path: Path,
+) -> None:
+    app = create_app(disabled_settings(tmp_path))
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://simulator.test"
+        ) as client,
+    ):
+        invalid = await client.post(
+            "/v1/sessions/missing/control", json={"action": "explode"}
+        )
+        missing = await client.post(
+            "/v1/sessions/missing/control", json={"action": "pause"}
+        )
+
+    assert invalid.status_code == 422
+    assert missing.status_code == 404

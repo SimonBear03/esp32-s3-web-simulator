@@ -6,7 +6,7 @@ updated before a new component or artifact is committed or distributed.
 
 | Component | Pinned version | Licence | Distribution in this repo | Role |
 | --- | --- | --- | --- | --- |
-| Espressif QEMU | `esp-develop-9.2.2-20260417` (`40edccac415693c5130f91c01d84176ae6008566`) | GPL-2.0-only overall; individual files may carry compatible notices | Source is not vendored. A reproducible build script fetches the pinned upstream commit and applies the tracked GPL patch. No binary is committed. | ESP32-S3 CPU and SoC emulation |
+| Espressif QEMU | `esp-develop-9.2.2-20260417` (`40edccac415693c5130f91c01d84176ae6008566`) | GPL-2.0-only overall; individual files may carry compatible notices | Source is not vendored. A reproducible build script fetches the pinned upstream commit and applies the tracked GPL patch set. No binary is committed. | ESP32-S3 CPU and SoC emulation |
 | Espressif ESP32-S3 ROM image | From the pinned Espressif QEMU release | Separate Espressif terms; redistribution review pending | Not committed or redistributed. A local operator supplies an artifact obtained from Espressif. | First-stage boot ROM required by the QEMU machine |
 | PlatformIO Espressif32 / Arduino-ESP32 | Platform `6.12.0`; Arduino-ESP32 `2.0.17` | Apache-2.0 and component-specific notices | Build dependency only; generated packages and firmware are not committed | Builds the simulator-owned conformance firmware |
 | Texas Instruments TCA8418 documentation | TCA8418 datasheet, current design reference | TI documentation terms | Documentation is not copied or redistributed | Authoritative register and FIFO behavior for the original QEMU device model |

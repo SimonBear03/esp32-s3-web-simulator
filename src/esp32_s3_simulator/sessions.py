@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from .boards import BoardProfile
 from .firmware import ValidatedFirmware, validate_and_pad_firmware, write_private_flash_image
-from .framebuffer import RGBFrame, parse_qemu_ppm
+from .framebuffer import RGBFrame, encode_framebuffer_packet, parse_qemu_ppm
 from .inputs import qmp_key_event
 from .qemu import QemuWorkerConfig, build_qemu_command
 from .qmp import QmpUnavailableError, execute_qmp
@@ -33,12 +33,22 @@ class WorkerUnavailableError(RuntimeError):
     pass
 
 
+class SessionTransitionError(RuntimeError):
+    pass
+
+
 class SessionState(StrEnum):
     STARTING = "starting"
     RUNNING = "running"
+    PAUSED = "paused"
     STOPPED = "stopped"
     FAILED = "failed"
     EXPIRED = "expired"
+
+
+ACTIVE_SESSION_STATES = frozenset(
+    {SessionState.STARTING, SessionState.RUNNING, SessionState.PAUSED}
+)
 
 
 @dataclass(slots=True, eq=False)
@@ -112,7 +122,7 @@ class SessionManager:
 
         async with self._lock:
             active_count = sum(
-                session.state in {SessionState.STARTING, SessionState.RUNNING}
+                session.state in ACTIVE_SESSION_STATES
                 for session in self._sessions.values()
             )
             if active_count >= self._settings.max_concurrent_sessions:
@@ -189,9 +199,41 @@ class SessionManager:
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "input-send-event", arguments)
 
+    async def pause(self, session_id: str) -> SessionRecord:
+        session = self.get(session_id)
+        if not self._settings.worker_qmp_enabled:
+            raise QmpUnavailableError("QMP session control is disabled for this worker")
+        async with session.qmp_lock:
+            if session.state is not SessionState.RUNNING:
+                raise SessionTransitionError(f"cannot pause session in {session.state} state")
+            await execute_qmp(session.qmp_socket_path, "stop")
+            session.state = SessionState.PAUSED
+        return session
+
+    async def resume(self, session_id: str) -> SessionRecord:
+        session = self.get(session_id)
+        if not self._settings.worker_qmp_enabled:
+            raise QmpUnavailableError("QMP session control is disabled for this worker")
+        async with session.qmp_lock:
+            if session.state is not SessionState.PAUSED:
+                raise SessionTransitionError(f"cannot resume session in {session.state} state")
+            await execute_qmp(session.qmp_socket_path, "cont")
+            session.state = SessionState.RUNNING
+        return session
+
+    async def reset(self, session_id: str) -> SessionRecord:
+        session = self.get(session_id)
+        if not self._settings.worker_qmp_enabled:
+            raise QmpUnavailableError("QMP session control is disabled for this worker")
+        async with session.qmp_lock:
+            if session.state not in {SessionState.RUNNING, SessionState.PAUSED}:
+                raise SessionTransitionError(f"cannot reset session in {session.state} state")
+            await execute_qmp(session.qmp_socket_path, "system_reset")
+        return session
+
     async def capture_framebuffer(self, session_id: str) -> RGBFrame:
         session = self.get(session_id)
-        if session.state is not SessionState.RUNNING:
+        if session.state not in {SessionState.RUNNING, SessionState.PAUSED}:
             raise RuntimeError("session framebuffer is not available")
         if not self._settings.worker_qmp_enabled:
             raise QmpUnavailableError("QMP framebuffer capture is disabled for this worker")
@@ -208,11 +250,25 @@ class SessionManager:
             finally:
                 screenshot_path.unlink(missing_ok=True)
 
+    async def subscribe_framebuffer(self, session_id: str) -> AsyncIterator[bytes]:
+        session = self.get(session_id)
+        previous_pixels: bytes | None = None
+        sequence = 0
+        interval_seconds = max(self._settings.framebuffer_interval_ms, 16) / 1000
+
+        while session.state in {SessionState.RUNNING, SessionState.PAUSED}:
+            frame = await self.capture_framebuffer(session_id)
+            if frame.pixels != previous_pixels:
+                yield encode_framebuffer_packet(frame, sequence)
+                previous_pixels = frame.pixels
+                sequence = (sequence + 1) & 0xFFFFFFFF
+            await asyncio.sleep(interval_seconds)
+
     async def subscribe_serial(self, session_id: str) -> AsyncIterator[bytes]:
         session = self.get(session_id)
         for chunk in session.serial_buffer:
             yield chunk
-        if session.state is not SessionState.RUNNING:
+        if session.state not in {SessionState.RUNNING, SessionState.PAUSED}:
             return
 
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=128)
@@ -263,7 +319,7 @@ class SessionManager:
             session.serial_buffer.append(chunk)
             self._publish(session, chunk)
         session.exit_code = await process.wait()
-        if session.state is SessionState.RUNNING:
+        if session.state in {SessionState.RUNNING, SessionState.PAUSED}:
             session.state = SessionState.STOPPED if session.exit_code == 0 else SessionState.FAILED
         self._publish(session, None)
         shutil.rmtree(session.runtime_directory, ignore_errors=True)
@@ -284,7 +340,7 @@ class SessionManager:
                 expired_ids = [
                     session.id
                     for session in self._sessions.values()
-                    if session.state in {SessionState.STARTING, SessionState.RUNNING}
+                    if session.state in ACTIVE_SESSION_STATES
                     and session.expires_at <= now
                 ]
                 for session_id in expired_ids:

@@ -21,8 +21,9 @@ class Settings:
     worker_qmp_enabled: bool = True
     max_concurrent_sessions: int = 2
     session_ttl_seconds: int = 120
-    worker_memory_limit_mib: int = 768
+    worker_memory_limit_mib: int = 1536
     worker_cpu_limit_seconds: int = 90
+    framebuffer_interval_ms: int = 100
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -47,9 +48,12 @@ class Settings:
             max_concurrent_sessions=int(os.environ.get("SIMULATOR_MAX_SESSIONS", "2")),
             session_ttl_seconds=int(os.environ.get("SIMULATOR_SESSION_TTL_SECONDS", "120")),
             worker_memory_limit_mib=int(
-                os.environ.get("SIMULATOR_WORKER_MEMORY_LIMIT_MIB", "768")
+                os.environ.get("SIMULATOR_WORKER_MEMORY_LIMIT_MIB", "1536")
             ),
             worker_cpu_limit_seconds=int(
                 os.environ.get("SIMULATOR_WORKER_CPU_LIMIT_SECONDS", "90")
+            ),
+            framebuffer_interval_ms=int(
+                os.environ.get("SIMULATOR_FRAMEBUFFER_INTERVAL_MS", "100")
             ),
         )

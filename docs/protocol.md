@@ -37,6 +37,10 @@ that prohibit local socket binding; it is not a production configuration.
 
 - `GET /v1/sessions/{id}` returns current state.
 - `DELETE /v1/sessions/{id}` stops the worker and destroys its runtime files.
+- `POST /v1/sessions/{id}/control` accepts one of
+  `{"action":"pause"}`, `{"action":"resume"}`, or `{"action":"reset"}`.
+  Pause and resume map to QEMU execution control; reset preserves the private
+  flash/NVS image.
 - Sessions expire automatically at the configured TTL.
 
 ## Serial stream
@@ -45,6 +49,26 @@ that prohibit local socket binding; it is not a production configuration.
 The server replays a bounded recent-output buffer when a debugger connects.
 UART is a byte stream: clients must not assume each WebSocket message is a full
 line.
+
+## Framebuffer stream
+
+`WS /v1/sessions/{id}/framebuffer` sends changed RGB24 frames as binary
+messages. Capture is demand-driven and bounded by
+`SIMULATOR_FRAMEBUFFER_INTERVAL_MS` (100 ms by default); a slow browser applies
+backpressure directly and cannot create an unbounded server queue. Unchanged
+frames are not resent.
+
+Each message begins with this 14-byte, network-byte-order header, followed by
+exactly `width * height * 3` row-major RGB bytes:
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 4 | ASCII magic `ESPF` |
+| 4 | 1 | protocol version, currently `1` |
+| 5 | 1 | pixel format, `1` for RGB24 |
+| 6 | 2 | width |
+| 8 | 2 | height |
+| 10 | 4 | frame sequence, wrapping uint32 |
 
 ## Board input
 
@@ -69,7 +93,6 @@ encoding are private worker details.
 
 ## Pending protocol surfaces
 
-Framebuffer updates, StickS3 button input, power events, QMP-backed pause/reset,
-breakpoints, memory inspection, and deterministic traces will use distinct
-typed WebSocket messages. They are not represented as fake-success endpoints
-until their worker implementations exist.
+StickS3 button input, power events, breakpoints, memory inspection, and
+deterministic traces will use distinct typed messages. They are not represented
+as fake-success endpoints until their worker implementations exist.

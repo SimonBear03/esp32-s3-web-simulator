@@ -17,6 +17,7 @@ from .sessions import (
     SessionCapacityError,
     SessionManager,
     SessionNotFoundError,
+    SessionTransitionError,
     WorkerUnavailableError,
 )
 from .settings import Settings
@@ -29,6 +30,12 @@ class KeyInputMessage(BaseModel):
     key: str
     pressed: bool
     sequence: int | str | None = None
+
+
+class SessionControlMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["pause", "resume", "reset"]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -98,6 +105,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except SessionNotFoundError as error:
             raise HTTPException(status_code=404, detail="simulation session not found") from error
 
+    @app.post("/v1/sessions/{session_id}/control")
+    async def control_session(
+        session_id: str, control: SessionControlMessage
+    ) -> dict[str, object]:
+        try:
+            if control.action == "pause":
+                session = await manager.pause(session_id)
+            elif control.action == "resume":
+                session = await manager.resume(session_id)
+            else:
+                session = await manager.reset(session_id)
+            return session.public_dict()
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except SessionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except QmpError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
     @app.websocket("/v1/sessions/{session_id}/serial")
     async def session_serial(websocket: WebSocket, session_id: str) -> None:
         try:
@@ -156,6 +182,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
         except WebSocketDisconnect:
             pass
+
+    @app.websocket("/v1/sessions/{session_id}/framebuffer")
+    async def session_framebuffer(websocket: WebSocket, session_id: str) -> None:
+        try:
+            manager.get(session_id)
+        except SessionNotFoundError:
+            await websocket.close(code=4404, reason="simulation session not found")
+            return
+
+        await websocket.accept()
+        try:
+            async for packet in manager.subscribe_framebuffer(session_id):
+                await websocket.send_bytes(packet)
+        except WebSocketDisconnect:
+            pass
+        except (QmpError, RuntimeError):
+            await websocket.close(code=1011, reason="framebuffer worker unavailable")
 
     return app
 

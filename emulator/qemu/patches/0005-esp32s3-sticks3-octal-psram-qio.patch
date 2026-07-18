@@ -1,0 +1,90 @@
+From: ESP32-S3 Web Simulator contributors
+Subject: [PATCH] esp32s3: support StickS3 octal PSRAM and QIO reads
+
+The StickS3 uses an ESP32-S3-PICO-1-N8R8 with QIO flash and octal PSRAM.
+Select the existing octal PSRAM command path for that board profile and adapt
+the ESP32-S3 controller's physical quad-lane dummy cycles to the serialized
+GigaDevice flash model. Also correct the SPI transfer-buffer index checks.
+
+SPDX-License-Identifier: GPL-2.0-only
+---
+ hw/ssi/esp32s3_spi.c | 15 +++++++++++++--
+ hw/xtensa/esp32s3.c  |  9 +++++++--
+ 2 files changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/hw/ssi/esp32s3_spi.c b/hw/ssi/esp32s3_spi.c
+index 90250e7e254ce13e23b7640a26522893bcd4b64e..d32083c4caccf947d5730c79e2814c475bab3235 100644
+--- a/hw/ssi/esp32s3_spi.c
++++ b/hw/ssi/esp32s3_spi.c
+@@ -38,6 +38,7 @@ enum {
+     CMD_WRDI = 0x4,
+     CMD_WREN = 0x6,
+     CMD_READ = 0x03,
++    CMD_QIOR = 0xeb,
+     CMD_HPM = 0xa3,
+ };
+
+@@ -142,11 +143,11 @@ static void esp32s3_spi_txrx_buffer(ESP32S3SpiState *s,
+     int bytes = MAX(tx_bytes, rx_bytes);
+     for (int i = 0; i < bytes; ++i) {
+         uint8_t byte = 0;
+-        if (byte < tx_bytes) {
++        if (i < tx_bytes) {
+             memcpy(&byte, tx + i, 1);
+         }
+         uint32_t res = ssi_transfer(s->spi, byte);
+-        if (byte < rx_bytes) {
++        if (i < rx_bytes) {
+             memcpy(rx + i, &res, 1);
+         }
+     }
+@@ -261,6 +262,16 @@ static void esp32s3_spi_begin_transaction(ESP32S3SpiState *s)
+         /* Only calculate and include dummy cycles when the USR_DUMMY bit is set! */
+         if (s->mem_user & R_SPI_MEM_USER_USR_DUMMY_MASK) {
+             esp32s3_spi_get_dummy(s, &t.dummy_bytes);
++
++            /*
++             * The GigaDevice flash model serializes QIO's continuous-read
++             * mode byte and four dummy bytes.  The ESP32-S3 exposes six
++             * physical quad-lane cycles as one placeholder byte, so supply
++             * the four additional bytes expected by the SSI flash model.
++             */
++            if (t.cmd == CMD_QIOR) {
++                t.dummy_bytes += 4;
++            }
+         }
+     }
+
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+index 237e5ef3f25d911bdfda28a5284fb6b9275f8475..ea9ee7b6160c85643532e7f285f681f27abc3788 100644
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -295,7 +295,9 @@ static void esp32s3_init_spi_flash(Esp32s3SocState *ms, BlockBackend* blk)
+                                 qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
+ }
+
+-static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes)
++static void esp32s3_machine_init_psram(Esp32s3SocState *ms,
++                                        uint32_t size_mbytes,
++                                        bool is_octal)
+ {
+     /* PSRAM attached to SPI1, CS1 */
+     DeviceState *spi_master = DEVICE(&ms->spi1);
+@@ -303,6 +305,7 @@ static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes
+     DeviceState *psram = qdev_new(TYPE_SSI_PSRAM);
+     qdev_prop_set_uint32(psram, "size_mbytes", size_mbytes);
+     qdev_prop_set_uint8(psram, "cs", 1);
++    qdev_prop_set_bit(psram, "is_octal", is_octal);
+     qdev_realize(psram, spi_bus, &error_fatal);
+     ms->psram = SSI_PSRAM(psram);
+     qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 1,
+@@ -821,6 +824,8 @@ static void esp32s3_machine_init(MachineState *machine)
+             esp32s3_init_spi_flash(ss, blk);
+         }
+         if (machine->ram_size > 0) {
+-            esp32s3_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB));
++            esp32s3_machine_init_psram(
++                ss, (uint32_t) (machine->ram_size / MiB),
++                !strcmp(ms->board_profile, "sticks3"));
+         }
+     }

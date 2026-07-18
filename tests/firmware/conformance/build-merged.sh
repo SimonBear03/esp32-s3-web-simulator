@@ -4,13 +4,14 @@
 set -eu
 
 PIO_COMMAND=${PIO_COMMAND:-pio}
+PIO_ENV=${PIO_ENV:-qemu-esp32s3}
 PLATFORMIO_ROOT=${PLATFORMIO_CORE_DIR:-"${HOME:?}/.platformio"}
-BUILD_DIRECTORY=.pio/build/qemu-esp32s3
+BUILD_DIRECTORY=".pio/build/$PIO_ENV"
 ESPTOOL="$PLATFORMIO_ROOT/packages/tool-esptoolpy/esptool.py"
 BOOT_APP0="$PLATFORMIO_ROOT/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 OUTPUT="$BUILD_DIRECTORY/firmware-merged.bin"
 
-"$PIO_COMMAND" run
+"$PIO_COMMAND" run --environment "$PIO_ENV"
 python3 "$ESPTOOL" --chip esp32s3 merge_bin \
     --output "$OUTPUT" \
     --flash_mode dio \

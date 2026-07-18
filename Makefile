@@ -1,5 +1,7 @@
 .PHONY: check foundation lint test build-qemu base-conformance
 
+BOARD_ID ?= cardputer-adv
+
 check: foundation lint test
 
 foundation:
@@ -18,4 +20,5 @@ base-conformance:
 	uv run ./scripts/run-base-conformance.py \
 		--qemu "$(QEMU)" \
 		--rom-directory "$(ROMS)" \
-		--firmware "$(FIRMWARE)"
+		--firmware "$(FIRMWARE)" \
+		--board-id "$(BOARD_ID)"

@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <Wire.h>
 #include <driver/spi_master.h>
+#include <soc/esp32s3/spiram.h>
 
 namespace {
 
@@ -11,6 +12,8 @@ constexpr uint32_t kHeartbeatIntervalMs = 500;
 Preferences preferences;
 uint32_t heartbeatSequence = 0;
 uint32_t lastHeartbeatAt = 0;
+uint32_t bootCount = 0;
+size_t nvsWriteBytes = 0;
 String inputBuffer;
 volatile bool keyboardInterruptPending = false;
 
@@ -22,6 +25,19 @@ constexpr uint8_t kTca8418EventCountRegister = 0x03;
 constexpr uint8_t kTca8418EventRegister = 0x04;
 
 constexpr spi_host_device_t kDisplaySpiHost = SPI3_HOST;
+#if SIMULATOR_STICKS3
+constexpr char kBoardId[] = "sticks3";
+constexpr gpio_num_t kDisplayClockPin = GPIO_NUM_40;
+constexpr gpio_num_t kDisplayMosiPin = GPIO_NUM_39;
+constexpr gpio_num_t kDisplayChipSelectPin = GPIO_NUM_41;
+constexpr uint8_t kDisplayDataCommandPin = 45;
+constexpr uint8_t kDisplayResetPin = 21;
+constexpr uint16_t kDisplayWidth = 135;
+constexpr uint16_t kDisplayHeight = 240;
+constexpr uint16_t kDisplayColumnOffset = 52;
+constexpr uint16_t kDisplayRowOffset = 40;
+#else
+constexpr char kBoardId[] = "cardputer-adv";
 constexpr gpio_num_t kDisplayClockPin = GPIO_NUM_36;
 constexpr gpio_num_t kDisplayMosiPin = GPIO_NUM_35;
 constexpr gpio_num_t kDisplayChipSelectPin = GPIO_NUM_37;
@@ -31,6 +47,7 @@ constexpr uint16_t kDisplayWidth = 240;
 constexpr uint16_t kDisplayHeight = 135;
 constexpr uint16_t kDisplayColumnOffset = 40;
 constexpr uint16_t kDisplayRowOffset = 53;
+#endif
 spi_device_handle_t displayDevice = nullptr;
 
 void IRAM_ATTR handleTca8418Interrupt() {
@@ -202,15 +219,51 @@ bool configureDisplay() {
   return true;
 }
 
-void printBootContract() {
-  preferences.begin("simulator", false);
-  const uint32_t bootCount = preferences.getUInt("boot_count", 0) + 1;
-  preferences.putUInt("boot_count", bootCount);
+bool verifyPsram() {
+#if SIMULATOR_STICKS3
+  constexpr size_t kTestBytes = 4096;
+  const size_t psramBytes = esp_spiram_get_size();
+  const size_t heapPsramBytes = ESP.getPsramSize();
+  const size_t freePsramBytes = ESP.getFreePsram();
+  uint8_t *testMemory = static_cast<uint8_t *>(ps_malloc(kTestBytes));
+  if (testMemory == nullptr || psramBytes != 8 * 1024 * 1024) {
+    Serial.printf("SIM:PSRAM_DIAG bytes=%u heap_bytes=%u free=%u allocation=%s\n",
+                  psramBytes, heapPsramBytes, freePsramBytes,
+                  testMemory == nullptr ? "failed" : "ok");
+    free(testMemory);
+    return false;
+  }
+  for (size_t index = 0; index < kTestBytes; index++) {
+    testMemory[index] = static_cast<uint8_t>((index * 37) ^ (index >> 3));
+  }
+  for (size_t index = 0; index < kTestBytes; index++) {
+    const uint8_t expected = static_cast<uint8_t>((index * 37) ^ (index >> 3));
+    if (testMemory[index] != expected) {
+      free(testMemory);
+      return false;
+    }
+  }
+  free(testMemory);
+  Serial.printf("SIM:PSRAM bytes=%u test=pass heap_bytes=%u\n",
+                psramBytes, heapPsramBytes);
+#endif
+  return true;
+}
 
-  Serial.println("SIM:BOOT version=1 profile=esp32s3-base");
+void initializeBootState() {
+  preferences.begin("simulator", false);
+  bootCount = preferences.getUInt("boot_count", 0) + 1;
+  nvsWriteBytes = preferences.putUInt("boot_count", bootCount);
+}
+
+void printBootContract() {
+  const uint32_t nvsReadback = preferences.getUInt("boot_count", 0);
+
+  Serial.printf("SIM:BOOT version=1 profile=%s\n", kBoardId);
   Serial.printf("SIM:FLASH bytes=%u\n", ESP.getFlashChipSize());
   Serial.printf("SIM:HEAP bytes=%u\n", ESP.getFreeHeap());
-  Serial.printf("SIM:NVS boot_count=%u\n", bootCount);
+  Serial.printf("SIM:NVS boot_count=%u write_bytes=%u readback=%u\n",
+                bootCount, nvsWriteBytes, nvsReadback);
   Serial.println("SIM:READY commands=ping,reset,nvs-clear");
 }
 
@@ -257,7 +310,13 @@ void readCommands() {
 void setup() {
   Serial.begin(115200);
   delay(50);
+#if !SIMULATOR_STICKS3
   configureTca8418();
+#endif
+  initializeBootState();
+  if (!verifyPsram()) {
+    Serial.println("SIM:PSRAM unavailable");
+  }
   if (!configureDisplay()) {
     Serial.println("SIM:DISPLAY unavailable");
   }
@@ -267,7 +326,9 @@ void setup() {
 
 void loop() {
   readCommands();
+#if !SIMULATOR_STICKS3
   readTca8418Events();
+#endif
   const uint32_t now = millis();
   if (now - lastHeartbeatAt >= kHeartbeatIntervalMs) {
     lastHeartbeatAt = now;
