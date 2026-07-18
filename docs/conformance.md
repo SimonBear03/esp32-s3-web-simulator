@@ -7,6 +7,16 @@ fixture will exercise boot, flash, UART, timers, reset, NVS, display transport,
 board input, PSRAM where applicable, and deterministic power events. Its source
 and build recipe will be pinned; generated binaries will remain untracked.
 
+The base fixture lives at `tests/firmware/conformance/`. Board-specific
+fixtures will build on its stable `SIM:` UART contract.
+
+The 2026-07-19 base build produced unpadded merged-image SHA-256
+`df7d5e4723023de09ed261884ee393c02c08789ac6d7d97d6838ce7e726d7048`.
+The service conformance runner observed three heartbeats, `SIM:PONG`, a software
+reset, a second boot, NVS incrementing from 1 to 2, continued heartbeats, and
+runtime-directory cleanup. QMP was disabled only because the Codex sandbox
+denies Unix-domain sockets; production conformance still requires it.
+
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.
 Their own failures must not be mislabeled as simulator failures.

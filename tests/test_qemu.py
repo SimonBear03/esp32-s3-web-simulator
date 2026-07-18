@@ -24,6 +24,7 @@ def test_worker_command_disables_network_and_exposes_qmp_and_serial() -> None:
     assert command[command.index("-serial") + 1] == "stdio"
     assert command[command.index("-monitor") + 1] == "none"
     assert command[command.index("-qmp") + 1].startswith("unix:/runtime/qmp.sock")
+    assert "-no-reboot" not in command
     assert "-m" not in command
 
 

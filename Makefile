@@ -1,4 +1,4 @@
-.PHONY: check foundation lint test build-qemu
+.PHONY: check foundation lint test build-qemu base-conformance
 
 check: foundation lint test
 
@@ -13,3 +13,9 @@ test:
 
 build-qemu:
 	./scripts/build-qemu.sh
+
+base-conformance:
+	uv run ./scripts/run-base-conformance.py \
+		--qemu "$(QEMU)" \
+		--rom-directory "$(ROMS)" \
+		--firmware "$(FIRMWARE)"

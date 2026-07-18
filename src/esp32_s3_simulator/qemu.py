@@ -31,7 +31,6 @@ def build_qemu_command(
         "-M",
         "esp32s3",
         "-nographic",
-        "-no-reboot",
         "-nic",
         "none",
         "-monitor",
