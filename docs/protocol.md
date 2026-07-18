@@ -72,8 +72,8 @@ exactly `width * height * 3` row-major RGB bytes:
 
 ## Board input
 
-`WS /v1/sessions/{id}/input` accepts typed JSON events. The first implemented
-event is a Cardputer ADV key transition:
+`WS /v1/sessions/{id}/input` accepts typed JSON events. Cardputer ADV key
+transitions use:
 
 ```json
 {"type":"key","key":"a","pressed":true,"sequence":17}
@@ -91,8 +91,23 @@ accepts the event. Invalid, unsupported, or unavailable inputs produce a typed
 These are board-level identifiers. QEMU key names and the Cardputer matrix
 encoding are private worker details.
 
+StickS3 has three additional event types:
+
+```json
+{"type":"button","button":"a","pressed":true,"sequence":18}
+{"type":"imu","acceleration_g":{"x":0,"y":0,"z":1},"angular_velocity_dps":{"x":0,"y":0,"z":0},"sequence":19}
+{"type":"power","battery_mv":3900,"vin_mv":5000,"charging":true,"sequence":20}
+```
+
+Buttons `a` and `b` map to the board's active-low GPIO 11 and 12 inputs. IMU
+values are finite physical units bounded to 16 g and 2000 dps; the behavioral
+BMI270 converts them according to firmware-selected range registers. Power
+values are bounded to 0–6000 mV and are exposed through the behavioral M5PM1
+register model. An acknowledgement means QEMU accepted the transition, not
+that real hardware behavior has been certified.
+
 ## Pending protocol surfaces
 
-StickS3 button input, power events, breakpoints, memory inspection, and
-deterministic traces will use distinct typed messages. They are not represented
-as fake-success endpoints until their worker implementations exist.
+Breakpoints, memory inspection, deterministic traces, and Cardputer ADV power
+events remain pending. They are not represented as fake-success endpoints
+until their worker implementations exist.

@@ -4,7 +4,15 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from esp32_s3_simulator.api import KeyInputMessage, SessionControlMessage, create_app
+from esp32_s3_simulator.api import (
+    INPUT_MESSAGE_ADAPTER,
+    ButtonInputMessage,
+    ImuInputMessage,
+    KeyInputMessage,
+    PowerInputMessage,
+    SessionControlMessage,
+    create_app,
+)
 from esp32_s3_simulator.settings import Settings
 
 
@@ -41,6 +49,33 @@ def test_input_message_contract_rejects_untyped_payloads() -> None:
     assert KeyInputMessage.model_validate(
         {"type": "key", "key": "a", "pressed": True, "sequence": 12}
     ).sequence == 12
+    assert isinstance(
+        INPUT_MESSAGE_ADAPTER.validate_python(
+            {"type": "button", "button": "a", "pressed": True}
+        ),
+        ButtonInputMessage,
+    )
+    assert isinstance(
+        INPUT_MESSAGE_ADAPTER.validate_python(
+            {
+                "type": "imu",
+                "acceleration_g": {"x": 0, "y": 0, "z": 1},
+                "angular_velocity_dps": {"x": 0, "y": 0, "z": 0},
+            }
+        ),
+        ImuInputMessage,
+    )
+    assert isinstance(
+        INPUT_MESSAGE_ADAPTER.validate_python(
+            {
+                "type": "power",
+                "battery_mv": 3900,
+                "vin_mv": 5000,
+                "charging": True,
+            }
+        ),
+        PowerInputMessage,
+    )
     assert SessionControlMessage.model_validate({"action": "pause"}).action == "pause"
 
 

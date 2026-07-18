@@ -17,6 +17,24 @@ size_t nvsWriteBytes = 0;
 String inputBuffer;
 volatile bool keyboardInterruptPending = false;
 
+#if SIMULATOR_STICKS3
+constexpr uint8_t kButtonAPin = 11;
+constexpr uint8_t kButtonBPin = 12;
+constexpr uint8_t kBmi270Address = 0x68;
+constexpr uint8_t kM5Pm1Address = 0x6E;
+constexpr uint8_t kInternalSdaPin = 47;
+constexpr uint8_t kInternalSclPin = 48;
+int lastButtonA = HIGH;
+int lastButtonB = HIGH;
+int16_t lastMotion[6] = {};
+uint16_t lastBatteryMv = 0;
+uint16_t lastVinMv = 0;
+uint8_t lastPowerSource = 0xFF;
+bool lastCharging = false;
+bool stickTelemetryReady = false;
+uint32_t lastStickTelemetryAt = 0;
+#endif
+
 constexpr uint8_t kTca8418Address = 0x34;
 constexpr uint8_t kTca8418InterruptPin = 11;
 constexpr uint8_t kTca8418ConfigRegister = 0x01;
@@ -119,6 +137,121 @@ void readTca8418Events() {
     keyboardInterruptPending = false;
   }
 }
+
+#if SIMULATOR_STICKS3
+bool writeI2cRegister(uint8_t address, uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool readI2cRegisters(uint8_t address, uint8_t reg, uint8_t *values,
+                      size_t length) {
+  Wire.beginTransmission(address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(address, static_cast<uint8_t>(length)) != length) {
+    return false;
+  }
+  for (size_t index = 0; index < length; index++) {
+    values[index] = Wire.read();
+  }
+  return true;
+}
+
+uint16_t littleEndianWord(const uint8_t *bytes) {
+  return static_cast<uint16_t>(bytes[0]) |
+         (static_cast<uint16_t>(bytes[1]) << 8);
+}
+
+void configureStickPeripherals() {
+  Wire.begin(kInternalSdaPin, kInternalSclPin, 400000);
+  pinMode(kButtonAPin, INPUT_PULLUP);
+  pinMode(kButtonBPin, INPUT_PULLUP);
+  lastButtonA = digitalRead(kButtonAPin);
+  lastButtonB = digitalRead(kButtonBPin);
+  Serial.printf("SIM:BUTTONS a_gpio=%u b_gpio=%u active=low\n", kButtonAPin,
+                kButtonBPin);
+
+  uint8_t chipId = 0;
+  const bool bmiReady =
+      readI2cRegisters(kBmi270Address, 0x00, &chipId, 1) && chipId == 0x24 &&
+      writeI2cRegister(kBmi270Address, 0x41, 0x02) &&
+      writeI2cRegister(kBmi270Address, 0x43, 0x00);
+  Serial.printf("SIM:BMI270 address=0x%02x chip_id=0x%02x ready=%u\n",
+                kBmi270Address, chipId, bmiReady);
+
+  uint8_t pmicId = 0;
+  const bool pmicReady =
+      readI2cRegisters(kM5Pm1Address, 0x00, &pmicId, 1);
+  Serial.printf("SIM:M5PM1 address=0x%02x device_id=0x%02x ready=%u\n",
+                kM5Pm1Address, pmicId, pmicReady);
+}
+
+void readStickButtons() {
+  const int buttonA = digitalRead(kButtonAPin);
+  const int buttonB = digitalRead(kButtonBPin);
+  if (buttonA != lastButtonA) {
+    lastButtonA = buttonA;
+    Serial.printf("SIM:BUTTON id=a pressed=%u\n", buttonA == LOW);
+  }
+  if (buttonB != lastButtonB) {
+    lastButtonB = buttonB;
+    Serial.printf("SIM:BUTTON id=b pressed=%u\n", buttonB == LOW);
+  }
+}
+
+void readStickTelemetry() {
+  const uint32_t now = millis();
+  if (stickTelemetryReady && now - lastStickTelemetryAt < 50) {
+    return;
+  }
+  lastStickTelemetryAt = now;
+
+  uint8_t motionBytes[12];
+  int16_t motion[6];
+  if (readI2cRegisters(kBmi270Address, 0x0C, motionBytes,
+                       sizeof(motionBytes))) {
+    for (size_t index = 0; index < 6; index++) {
+      motion[index] = static_cast<int16_t>(littleEndianWord(
+          motionBytes + index * 2));
+    }
+    if (!stickTelemetryReady ||
+        memcmp(motion, lastMotion, sizeof(motion)) != 0) {
+      memcpy(lastMotion, motion, sizeof(motion));
+      Serial.printf(
+          "SIM:IMU_RAW ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
+          motion[0], motion[1], motion[2], motion[3], motion[4], motion[5]);
+    }
+  }
+
+  uint8_t source = 0;
+  uint8_t gpioInput = 0;
+  uint8_t voltageBytes[4];
+  if (readI2cRegisters(kM5Pm1Address, 0x04, &source, 1) &&
+      readI2cRegisters(kM5Pm1Address, 0x12, &gpioInput, 1) &&
+      readI2cRegisters(kM5Pm1Address, 0x22, voltageBytes, 4)) {
+    const uint16_t batteryMv = littleEndianWord(voltageBytes);
+    const uint16_t vinMv = littleEndianWord(voltageBytes + 2);
+    const bool charging = !(gpioInput & 0x01);
+    if (!stickTelemetryReady || batteryMv != lastBatteryMv ||
+        vinMv != lastVinMv || source != lastPowerSource ||
+        charging != lastCharging) {
+      lastBatteryMv = batteryMv;
+      lastVinMv = vinMv;
+      lastPowerSource = source;
+      lastCharging = charging;
+      Serial.printf(
+          "SIM:POWER battery_mv=%u vin_mv=%u source=%u charging=%u\n",
+          batteryMv, vinMv, source, charging);
+    }
+  }
+  stickTelemetryReady = true;
+}
+#endif
 
 bool transmitDisplay(const uint8_t *data, size_t length, bool isData) {
   digitalWrite(kDisplayDataCommandPin, isData ? HIGH : LOW);
@@ -312,6 +445,8 @@ void setup() {
   delay(50);
 #if !SIMULATOR_STICKS3
   configureTca8418();
+#else
+  configureStickPeripherals();
 #endif
   initializeBootState();
   if (!verifyPsram()) {
@@ -328,6 +463,9 @@ void loop() {
   readCommands();
 #if !SIMULATOR_STICKS3
   readTca8418Events();
+#else
+  readStickButtons();
+  readStickTelemetry();
 #endif
   const uint32_t now = millis();
   if (now - lastHeartbeatAt >= kHeartbeatIntervalMs) {

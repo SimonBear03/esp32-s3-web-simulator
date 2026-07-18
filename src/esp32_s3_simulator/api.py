@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from . import __version__
 from .boards import BOARD_PROFILES, get_board_profile
@@ -30,6 +30,52 @@ class KeyInputMessage(BaseModel):
     key: str
     pressed: bool
     sequence: int | str | None = None
+
+
+class ButtonInputMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["button"]
+    button: Literal["a", "b"]
+    pressed: bool
+    sequence: int | str | None = None
+
+
+class Vector3Message(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x: float
+    y: float
+    z: float
+
+    def as_tuple(self) -> tuple[float, float, float]:
+        return (self.x, self.y, self.z)
+
+
+class ImuInputMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["imu"]
+    acceleration_g: Vector3Message
+    angular_velocity_dps: Vector3Message
+    sequence: int | str | None = None
+
+
+class PowerInputMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["power"]
+    battery_mv: int
+    vin_mv: int
+    charging: bool
+    sequence: int | str | None = None
+
+
+InputMessage = Annotated[
+    KeyInputMessage | ButtonInputMessage | ImuInputMessage | PowerInputMessage,
+    Field(discriminator="type"),
+]
+INPUT_MESSAGE_ADAPTER = TypeAdapter(InputMessage)
 
 
 class SessionControlMessage(BaseModel):
@@ -165,8 +211,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 payload = await websocket.receive_text()
                 try:
-                    event = KeyInputMessage.model_validate_json(payload)
-                    await manager.send_key(session_id, event.key, event.pressed)
+                    event = INPUT_MESSAGE_ADAPTER.validate_json(payload)
+                    if isinstance(event, KeyInputMessage):
+                        await manager.send_key(session_id, event.key, event.pressed)
+                    elif isinstance(event, ButtonInputMessage):
+                        await manager.send_button(
+                            session_id, event.button, event.pressed
+                        )
+                    elif isinstance(event, ImuInputMessage):
+                        await manager.set_imu_sample(
+                            session_id,
+                            event.acceleration_g.as_tuple(),
+                            event.angular_velocity_dps.as_tuple(),
+                        )
+                    else:
+                        await manager.set_power_state(
+                            session_id,
+                            event.battery_mv,
+                            event.vin_mv,
+                            event.charging,
+                        )
                     await websocket.send_json({"type": "ack", "sequence": event.sequence})
                 except ValidationError as error:
                     await websocket.send_json(

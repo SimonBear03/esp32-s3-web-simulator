@@ -68,6 +68,22 @@ async def run(args: argparse.Namespace) -> None:
                 await wait_for_text(session, "SIM:TCA8418_IRQ pin=11 mode=change")
             else:
                 await wait_for_text(session, "SIM:PSRAM bytes=8388608 test=pass")
+                await wait_for_text(
+                    session, "SIM:BUTTONS a_gpio=11 b_gpio=12 active=low"
+                )
+                await wait_for_text(
+                    session, "SIM:BMI270 address=0x68 chip_id=0x24 ready=1"
+                )
+                await wait_for_text(
+                    session, "SIM:M5PM1 address=0x6e device_id=0x51 ready=1"
+                )
+                await wait_for_text(
+                    session, "SIM:IMU_RAW ax=0 ay=0 az=4096 gx=0 gy=0 gz=0"
+                )
+                await wait_for_text(
+                    session,
+                    "SIM:POWER battery_mv=3900 vin_mv=5000 source=0 charging=1",
+                )
             await wait_for_text(
                 session,
                 f"SIM:DISPLAY controller=st7789 width={board.display.width} "
@@ -123,6 +139,30 @@ async def run(args: argparse.Namespace) -> None:
                     await manager.send_key(session.id, "a", False)
                     await wait_for_text(session, "SIM:KEY raw=0x8d")
                     await wait_for_text(session, "SIM:KEY raw=0x0d")
+                else:
+                    await manager.send_button(session.id, "a", True)
+                    await wait_for_text(session, "SIM:BUTTON id=a pressed=1")
+                    await manager.send_button(session.id, "a", False)
+                    await wait_for_text(session, "SIM:BUTTON id=a pressed=0")
+                    await manager.send_button(session.id, "b", True)
+                    await wait_for_text(session, "SIM:BUTTON id=b pressed=1")
+                    await manager.send_button(session.id, "b", False)
+                    await wait_for_text(session, "SIM:BUTTON id=b pressed=0")
+
+                    await manager.set_imu_sample(
+                        session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0)
+                    )
+                    await wait_for_text(
+                        session,
+                        "SIM:IMU_RAW ax=4096 ay=0 az=0 gx=0 gy=0 gz=4096",
+                    )
+                    await manager.set_power_state(
+                        session.id, battery_mv=3700, vin_mv=0, charging=False
+                    )
+                    await wait_for_text(
+                        session,
+                        "SIM:POWER battery_mv=3700 vin_mv=0 source=2 charging=0",
+                    )
 
             await manager.write_serial(session.id, b"ping\n")
             await wait_for_text(session, "SIM:PONG")
@@ -132,7 +172,6 @@ async def run(args: argparse.Namespace) -> None:
                 heartbeat_count = serial_text(session).count("SIM:HEARTBEAT")
                 await manager.reset(session.id)
                 expected_boot_count += 1
-                await wait_for_text(session, "SIM:BOOT", count=expected_boot_count)
                 await wait_for_text(
                     session,
                     f"SIM:NVS boot_count={expected_boot_count} "
@@ -145,7 +184,6 @@ async def run(args: argparse.Namespace) -> None:
             heartbeat_count = serial_text(session).count("SIM:HEARTBEAT")
             await manager.write_serial(session.id, b"reset\n")
             expected_boot_count += 1
-            await wait_for_text(session, "SIM:BOOT", count=expected_boot_count)
             output = await wait_for_text(
                 session,
                 f"SIM:NVS boot_count={expected_boot_count} "

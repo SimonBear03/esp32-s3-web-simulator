@@ -11,9 +11,9 @@ The base fixture lives at `tests/firmware/conformance/`. Board-specific
 fixtures will build on its stable `SIM:` UART contract.
 
 The 2026-07-19 two-profile fixture produced unpadded merged-image SHA-256
-`ba108274608d81af179681e7a8790ebf5e2d05215087768a786f6991e9bdf377`
+`2095d588cd9f83ee2d479ac3ea9e0fcb0ba33302897918e4e67cdce47d6ab74b`
 for Cardputer ADV and
-`15813b6a0a15c5bc1fa962f118296917da79e42087f529c622d491cbd48ec147`
+`5a128f26a653e77d738860bfd236710975f502715a75be15bd2f3e6ddb826e16`
 for StickS3.
 The service conformance runner observed TCA8418 configuration at I2C address
 `0x34`, ESP-IDF `CHANGE` interrupt registration on GPIO 11, three heartbeats,
@@ -57,6 +57,17 @@ controller's physical quad-lane dummy cycles and QEMU's serialized GigaDevice
 flash model. Patch 0005 supplies the model's missing preamble bytes and selects
 octal PSRAM for the StickS3 profile. Exact NVS readback now passes immediately
 after each write and persists across both QMP and firmware-requested resets.
+
+Patch 0006 adds direct, active-low StickS3 button lines plus behavioral BMI270
+and M5PM1 I2C devices. The QMP-enabled service gate observed A and B press and
+release on firmware GPIO 11/12, BMI270 chip ID `0x24` at `0x68`, and the default
+stationary sample `(0,0,4096)` at the fixture's 8 g range. A runtime event then
+produced `(4096,0,0)` acceleration and `(0,0,4096)` gyro, corresponding to 1 g
+X and 250 dps Z. The same run read default M5PM1 telemetry of 3900 mV battery,
+5000 mV VIN, and charging, then read back an injected 3700 mV battery-only,
+charging-off state. Both values persisted as environmental state across QMP
+and firmware resets while NVS advanced exactly from boot 1 to 3. Cardputer ADV
+then passed its full keyboard/display/NVS regression gate with the same worker.
 
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.

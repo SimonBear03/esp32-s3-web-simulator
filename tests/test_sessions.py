@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 import esp32_s3_simulator.sessions as sessions_module
-from esp32_s3_simulator.boards import CARDPUTER_ADV
+from esp32_s3_simulator.boards import CARDPUTER_ADV, STICKS3, BoardProfile
 from esp32_s3_simulator.firmware import ValidatedFirmware
 from esp32_s3_simulator.framebuffer import RGBFrame, parse_framebuffer_packet
 from esp32_s3_simulator.sessions import (
@@ -20,7 +20,9 @@ from esp32_s3_simulator.sessions import (
 from esp32_s3_simulator.settings import Settings
 
 
-def manager_with_session(tmp_path: Path) -> tuple[SessionManager, SessionRecord]:
+def manager_with_session(
+    tmp_path: Path, board: BoardProfile = CARDPUTER_ADV
+) -> tuple[SessionManager, SessionRecord]:
     settings = Settings(
         runtime_root=tmp_path,
         qemu_executable=tmp_path / "qemu",
@@ -34,10 +36,10 @@ def manager_with_session(tmp_path: Path) -> tuple[SessionManager, SessionRecord]
     runtime_directory.mkdir()
     session = SessionRecord(
         id="session-id",
-        board=CARDPUTER_ADV,
+        board=board,
         firmware=ValidatedFirmware(
             source_size_bytes=4096,
-            flash_size_bytes=CARDPUTER_ADV.flash_size_bytes,
+            flash_size_bytes=board.flash_size_bytes,
             source_sha256="a" * 64,
             flash_sha256="b" * 64,
             segment_count=1,
@@ -74,6 +76,46 @@ async def test_qmp_controls_enforce_and_update_session_state(
     assert (await manager.reset(session.id)).state is SessionState.PAUSED
     assert (await manager.resume(session.id)).state is SessionState.RUNNING
     assert commands == ["stop", "system_reset", "cont"]
+
+
+async def test_sticks3_runtime_inputs_reach_qmp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path, STICKS3)
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def execute_qmp(
+        _socket: Path, command: str, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        calls.append((command, arguments))
+        return {}
+
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+
+    await manager.send_button(session.id, "a", True)
+    await manager.set_imu_sample(
+        session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0)
+    )
+    await manager.set_power_state(
+        session.id, battery_mv=3700, vin_mv=0, charging=False
+    )
+
+    assert [call[0] for call in calls] == ["qom-set", "qom-set", "qom-set"]
+    assert calls[0][1] == {
+        "path": "/machine/peripheral/sticks3-buttons",
+        "property": "button-a",
+        "value": True,
+    }
+    assert calls[1][1] == {
+        "path": "/machine/peripheral/sticks3-imu",
+        "property": "sample",
+        "value": "1000,0,0,0,0,250000",
+    }
+    assert calls[2][1] == {
+        "path": "/machine/peripheral/sticks3-pmic",
+        "property": "power-state",
+        "value": "3700,0,0",
+    }
 
 
 async def test_capture_framebuffer_uses_private_qmp_file_and_removes_it(

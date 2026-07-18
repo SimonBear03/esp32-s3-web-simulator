@@ -1,0 +1,887 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: ESP32-S3 Web Simulator contributors <noreply@example.com>
+Date: Sun, 19 Jul 2026 12:00:00 +0800
+Subject: [PATCH 6/6] esp32s3: model StickS3 buttons, BMI270, and M5PM1
+
+Add active-low GPIO button injection plus deterministic I2C models for
+the StickS3 BMI270 IMU and M5PM1 power-management controller. Expose
+runtime sensor and power state through private QOM properties.
+---
+ hw/input/Kconfig                   |   3 +
+ hw/input/meson.build               |   1 +
+ hw/input/sticks3_buttons.c         | 169 ++++++++++++++++++++++++
+ hw/misc/Kconfig                    |   4 +
+ hw/misc/m5pm1.c                    | 210 ++++++++++++++++++++++++++++++
+ hw/misc/meson.build                |   1 +
+ hw/sensor/Kconfig                  |   4 +
+ hw/sensor/bmi270.c                 | 260 +++++++++++++++++++++++++++++++++++++
+ hw/sensor/meson.build              |   1 +
+ hw/xtensa/Kconfig                  |   4 +-
+ hw/xtensa/esp32s3.c                |  30 +++++
+ include/hw/input/sticks3_buttons.h |  16 +++
+ include/hw/misc/m5pm1.h            |  14 ++
+ include/hw/sensor/bmi270.h         |  14 ++
+ 14 files changed, 730 insertions(+), 1 deletion(-)
+
+diff --git a/hw/input/Kconfig b/hw/input/Kconfig
+index 53f0a5a33014cdb9de471a300cb144ab0cf34e3f..2be8e99b8bd9d47d6035edff24b0e98f0ff719cd 100644
+--- a/hw/input/Kconfig
++++ b/hw/input/Kconfig
+@@ -19,6 +19,9 @@ config STELLARIS_GAMEPAD
+ config TCA8418
+     bool
+
++config STICKS3_BUTTONS
++    bool
++
+ config VIRTIO_INPUT
+     bool
+     default y
+diff --git a/hw/input/meson.build b/hw/input/meson.build
+index f0b9f3f548c36888f952a4fb003f013d1d9927e3..2a0daece54b476f6f19f8a855b9397e06460980a 100644
+--- a/hw/input/meson.build
++++ b/hw/input/meson.build
+@@ -5,6 +5,7 @@ system_ss.add(when: 'CONFIG_PL050', if_true: files('pl050.c'))
+ system_ss.add(when: 'CONFIG_PS2', if_true: files('ps2.c'))
+ system_ss.add(when: 'CONFIG_STELLARIS_GAMEPAD', if_true: files('stellaris_gamepad.c'))
+ system_ss.add(when: 'CONFIG_TCA8418', if_true: files('tca8418.c'))
++system_ss.add(when: 'CONFIG_STICKS3_BUTTONS', if_true: files('sticks3_buttons.c'))
+
+ system_ss.add(when: 'CONFIG_VIRTIO_INPUT', if_true: files('virtio-input.c'))
+ system_ss.add(when: 'CONFIG_VIRTIO_INPUT', if_true: files('virtio-input-hid.c'))
+diff --git a/hw/input/sticks3_buttons.c b/hw/input/sticks3_buttons.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff8879587b3e73a28f984a11a2c7b306c1d35571
+--- /dev/null
++++ b/hw/input/sticks3_buttons.c
+@@ -0,0 +1,169 @@
++/*
++ * M5Stack StickS3 physical buttons
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "qemu/osdep.h"
++#include "hw/input/sticks3_buttons.h"
++#include "hw/irq.h"
++#include "migration/vmstate.h"
++#include "qapi/error.h"
++#include "qemu/module.h"
++#include "ui/console.h"
++
++OBJECT_DECLARE_SIMPLE_TYPE(StickS3ButtonsState, STICKS3_BUTTONS)
++
++enum {
++    STICKS3_BUTTON_A,
++    STICKS3_BUTTON_B,
++    STICKS3_BUTTON_COUNT,
++};
++
++struct StickS3ButtonsState {
++    DeviceState parent_obj;
++
++    qemu_irq outputs[STICKS3_BUTTON_COUNT];
++    bool pressed[STICKS3_BUTTON_COUNT];
++    QemuInputHandlerState *input_handler;
++};
++
++static int sticks3_button_for_qcode(QKeyCode qcode)
++{
++    switch (qcode) {
++    case Q_KEY_CODE_A:
++        return STICKS3_BUTTON_A;
++    case Q_KEY_CODE_B:
++        return STICKS3_BUTTON_B;
++    default:
++        return -1;
++    }
++}
++
++static void sticks3_buttons_set_pressed(StickS3ButtonsState *s, int button,
++                                         bool pressed)
++{
++    if (s->pressed[button] == pressed) {
++        return;
++    }
++    s->pressed[button] = pressed;
++    qemu_set_irq(s->outputs[button], !pressed);
++}
++
++static void sticks3_buttons_input_event(DeviceState *dev, QemuConsole *src,
++                                         InputEvent *evt)
++{
++    StickS3ButtonsState *s = STICKS3_BUTTONS(dev);
++    InputKeyEvent *key = evt->u.key.data;
++    QKeyCode qcode = qemu_input_key_value_to_qcode(key->key);
++    int button = sticks3_button_for_qcode(qcode);
++
++    if (button < 0) {
++        return;
++    }
++    sticks3_buttons_set_pressed(s, button, key->down);
++}
++
++static const QemuInputHandler sticks3_buttons_input_handler = {
++    .name = "StickS3 buttons",
++    .mask = INPUT_EVENT_MASK_KEY,
++    .event = sticks3_buttons_input_event,
++};
++
++static bool sticks3_buttons_get_a(Object *obj, Error **errp)
++{
++    return STICKS3_BUTTONS(obj)->pressed[STICKS3_BUTTON_A];
++}
++
++static void sticks3_buttons_set_a(Object *obj, bool value, Error **errp)
++{
++    sticks3_buttons_set_pressed(STICKS3_BUTTONS(obj), STICKS3_BUTTON_A,
++                                value);
++}
++
++static bool sticks3_buttons_get_b(Object *obj, Error **errp)
++{
++    return STICKS3_BUTTONS(obj)->pressed[STICKS3_BUTTON_B];
++}
++
++static void sticks3_buttons_set_b(Object *obj, bool value, Error **errp)
++{
++    sticks3_buttons_set_pressed(STICKS3_BUTTONS(obj), STICKS3_BUTTON_B,
++                                value);
++}
++
++static void sticks3_buttons_reset(DeviceState *dev)
++{
++    StickS3ButtonsState *s = STICKS3_BUTTONS(dev);
++    unsigned int index;
++
++    memset(s->pressed, 0, sizeof(s->pressed));
++    for (index = 0; index < STICKS3_BUTTON_COUNT; index++) {
++        qemu_set_irq(s->outputs[index], 1);
++    }
++}
++
++static void sticks3_buttons_init(Object *obj)
++{
++    object_property_add_bool(obj, "button-a", sticks3_buttons_get_a,
++                             sticks3_buttons_set_a);
++    object_property_add_bool(obj, "button-b", sticks3_buttons_get_b,
++                             sticks3_buttons_set_b);
++}
++
++static void sticks3_buttons_realize(DeviceState *dev, Error **errp)
++{
++    StickS3ButtonsState *s = STICKS3_BUTTONS(dev);
++
++    qdev_init_gpio_out_named(dev, s->outputs, "button", STICKS3_BUTTON_COUNT);
++    s->input_handler = qemu_input_handler_register(
++        dev, &sticks3_buttons_input_handler);
++}
++
++static void sticks3_buttons_unrealize(DeviceState *dev)
++{
++    StickS3ButtonsState *s = STICKS3_BUTTONS(dev);
++
++    if (s->input_handler) {
++        qemu_input_handler_unregister(s->input_handler);
++        s->input_handler = NULL;
++    }
++}
++
++static const VMStateDescription vmstate_sticks3_buttons = {
++    .name = TYPE_STICKS3_BUTTONS,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_BOOL_ARRAY(pressed, StickS3ButtonsState,
++                           STICKS3_BUTTON_COUNT),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void sticks3_buttons_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = sticks3_buttons_realize;
++    dc->unrealize = sticks3_buttons_unrealize;
++    device_class_set_legacy_reset(dc, sticks3_buttons_reset);
++    dc->vmsd = &vmstate_sticks3_buttons;
++}
++
++static const TypeInfo sticks3_buttons_info = {
++    .name = TYPE_STICKS3_BUTTONS,
++    .parent = TYPE_DEVICE,
++    .instance_size = sizeof(StickS3ButtonsState),
++    .instance_init = sticks3_buttons_init,
++    .class_init = sticks3_buttons_class_init,
++};
++
++static void sticks3_buttons_register_types(void)
++{
++    type_register_static(&sticks3_buttons_info);
++}
++
++type_init(sticks3_buttons_register_types)
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 1f1baa5dde9e327db85634f7274c66eb6228b85a..f3c32fd9584b389bb8f18a767ba0d711626a38f0 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -43,6 +43,10 @@ config I2C_ECHO
+     default y if TEST_DEVICES
+     depends on I2C
+
++config M5PM1
++    bool
++    depends on I2C
++
+ config PL310
+     bool
+
+diff --git a/hw/misc/m5pm1.c b/hw/misc/m5pm1.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..2ce1dadac8a857410e7c3cbb8b0506481e46e049
+--- /dev/null
++++ b/hw/misc/m5pm1.c
+@@ -0,0 +1,210 @@
++/*
++ * M5Stack M5PM1 power management controller
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ *
++ * This behavioral model provides firmware-visible configuration and the
++ * battery, input-voltage, source, and charging signals used by StickS3 apps.
++ */
++
++#include "qemu/osdep.h"
++#include "hw/i2c/i2c.h"
++#include "hw/misc/m5pm1.h"
++#include "migration/vmstate.h"
++#include "qapi/error.h"
++#include "qemu/module.h"
++
++#define M5PM1_REGISTER_COUNT 0x80
++
++#define M5PM1_REG_DEVICE_ID 0x00
++#define M5PM1_REG_DEVICE_MODEL 0x01
++#define M5PM1_REG_HW_REV 0x02
++#define M5PM1_REG_SW_REV 0x03
++#define M5PM1_REG_PWR_SRC 0x04
++#define M5PM1_REG_PWR_CFG 0x06
++#define M5PM1_REG_GPIO_IN 0x12
++#define M5PM1_REG_VREF_L 0x20
++#define M5PM1_REG_VBAT_L 0x22
++#define M5PM1_REG_VIN_L 0x24
++#define M5PM1_REG_5VINOUT_L 0x26
++
++OBJECT_DECLARE_SIMPLE_TYPE(M5PM1State, M5PM1)
++
++struct M5PM1State {
++    I2CSlave parent_obj;
++
++    uint8_t registers[M5PM1_REGISTER_COUNT];
++    uint8_t pointer;
++    bool expect_pointer;
++
++    uint16_t battery_mv;
++    uint16_t vin_mv;
++    bool charging;
++};
++
++static void m5pm1_set_voltage(M5PM1State *s, uint8_t reg, uint16_t value)
++{
++    s->registers[reg] = value;
++    s->registers[reg + 1] = value >> 8;
++}
++
++static void m5pm1_update_state_registers(M5PM1State *s)
++{
++    s->registers[M5PM1_REG_PWR_SRC] = s->vin_mv ? 0 : 2;
++    s->registers[M5PM1_REG_GPIO_IN] = s->charging ? 0x00 : 0x01;
++    m5pm1_set_voltage(s, M5PM1_REG_VREF_L, 3300);
++    m5pm1_set_voltage(s, M5PM1_REG_VBAT_L, s->battery_mv);
++    m5pm1_set_voltage(s, M5PM1_REG_VIN_L, s->vin_mv);
++    m5pm1_set_voltage(s, M5PM1_REG_5VINOUT_L, 0);
++}
++
++static char *m5pm1_get_power_state(Object *obj, Error **errp)
++{
++    M5PM1State *s = M5PM1(obj);
++
++    return g_strdup_printf("%u,%u,%u", s->battery_mv, s->vin_mv,
++                           s->charging);
++}
++
++static void m5pm1_set_power_state(Object *obj, const char *value, Error **errp)
++{
++    M5PM1State *s = M5PM1(obj);
++    unsigned int battery_mv;
++    unsigned int vin_mv;
++    unsigned int charging;
++    char trailing;
++
++    if (sscanf(value, "%u,%u,%u%c", &battery_mv, &vin_mv, &charging,
++               &trailing) != 3) {
++        error_setg(errp, "M5PM1 power-state must be battery_mv,vin_mv,charging");
++        return;
++    }
++    if (battery_mv > 6000 || vin_mv > 6000 || charging > 1) {
++        error_setg(errp, "M5PM1 power-state is outside the behavioral model range");
++        return;
++    }
++    s->battery_mv = battery_mv;
++    s->vin_mv = vin_mv;
++    s->charging = charging;
++    m5pm1_update_state_registers(s);
++}
++
++static bool m5pm1_read_only_register(uint8_t reg)
++{
++    return reg <= M5PM1_REG_PWR_SRC || reg == M5PM1_REG_GPIO_IN ||
++           (reg >= M5PM1_REG_VREF_L && reg <= M5PM1_REG_5VINOUT_L + 1);
++}
++
++static uint8_t m5pm1_read_register(M5PM1State *s, uint8_t reg)
++{
++    m5pm1_update_state_registers(s);
++    return reg < M5PM1_REGISTER_COUNT ? s->registers[reg] : 0;
++}
++
++static void m5pm1_write_register(M5PM1State *s, uint8_t reg, uint8_t value)
++{
++    if (reg < M5PM1_REGISTER_COUNT && !m5pm1_read_only_register(reg)) {
++        s->registers[reg] = value;
++    }
++}
++
++static int m5pm1_event(I2CSlave *i2c, enum i2c_event event)
++{
++    M5PM1State *s = M5PM1(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->expect_pointer = true;
++    }
++    return 0;
++}
++
++static int m5pm1_send(I2CSlave *i2c, uint8_t data)
++{
++    M5PM1State *s = M5PM1(i2c);
++
++    if (s->expect_pointer) {
++        s->pointer = data;
++        s->expect_pointer = false;
++    } else {
++        m5pm1_write_register(s, s->pointer++, data);
++    }
++    return 0;
++}
++
++static uint8_t m5pm1_recv(I2CSlave *i2c)
++{
++    M5PM1State *s = M5PM1(i2c);
++
++    return m5pm1_read_register(s, s->pointer++);
++}
++
++static void m5pm1_reset(DeviceState *dev)
++{
++    M5PM1State *s = M5PM1(dev);
++
++    memset(s->registers, 0, sizeof(s->registers));
++    s->registers[M5PM1_REG_DEVICE_ID] = 0x51;
++    s->registers[M5PM1_REG_DEVICE_MODEL] = 0x01;
++    s->registers[M5PM1_REG_HW_REV] = 0x01;
++    s->registers[M5PM1_REG_SW_REV] = 0x01;
++    s->registers[M5PM1_REG_PWR_CFG] = 0x07;
++    s->pointer = 0;
++    s->expect_pointer = false;
++    m5pm1_update_state_registers(s);
++}
++
++static void m5pm1_init(Object *obj)
++{
++    M5PM1State *s = M5PM1(obj);
++
++    s->battery_mv = 3900;
++    s->vin_mv = 5000;
++    s->charging = true;
++    object_property_add_str(obj, "power-state", m5pm1_get_power_state,
++                            m5pm1_set_power_state);
++}
++
++static const VMStateDescription vmstate_m5pm1 = {
++    .name = TYPE_M5PM1,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, M5PM1State),
++        VMSTATE_UINT8_ARRAY(registers, M5PM1State, M5PM1_REGISTER_COUNT),
++        VMSTATE_UINT8(pointer, M5PM1State),
++        VMSTATE_BOOL(expect_pointer, M5PM1State),
++        VMSTATE_UINT16(battery_mv, M5PM1State),
++        VMSTATE_UINT16(vin_mv, M5PM1State),
++        VMSTATE_BOOL(charging, M5PM1State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void m5pm1_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *sc = I2C_SLAVE_CLASS(klass);
++
++    device_class_set_legacy_reset(dc, m5pm1_reset);
++    dc->vmsd = &vmstate_m5pm1;
++    sc->event = m5pm1_event;
++    sc->recv = m5pm1_recv;
++    sc->send = m5pm1_send;
++}
++
++static const TypeInfo m5pm1_info = {
++    .name = TYPE_M5PM1,
++    .parent = TYPE_I2C_SLAVE,
++    .instance_size = sizeof(M5PM1State),
++    .instance_init = m5pm1_init,
++    .class_init = m5pm1_class_init,
++};
++
++static void m5pm1_register_types(void)
++{
++    type_register_static(&m5pm1_info);
++}
++
++type_init(m5pm1_register_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 4c2b5b3caea547490780a4afaf19930da1be1931..c1755c7dbb5569722f9c330ca8445bf1df57ea42 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -5,6 +5,7 @@ system_ss.add(when: 'CONFIG_ISA_DEBUG', if_true: files('debugexit.c'))
+ system_ss.add(when: 'CONFIG_ISA_TESTDEV', if_true: files('pc-testdev.c'))
+ system_ss.add(when: 'CONFIG_PCI_TESTDEV', if_true: files('pci-testdev.c'))
+ system_ss.add(when: 'CONFIG_UNIMP', if_true: files('unimp.c'))
++system_ss.add(when: 'CONFIG_M5PM1', if_true: files('m5pm1.c'))
+ system_ss.add(when: 'CONFIG_EMPTY_SLOT', if_true: files('empty_slot.c'))
+ system_ss.add(when: 'CONFIG_LED', if_true: files('led.c'))
+ system_ss.add(when: 'CONFIG_PVPANIC_COMMON', if_true: files('pvpanic.c'))
+diff --git a/hw/sensor/Kconfig b/hw/sensor/Kconfig
+index bc6331b4abbd97128169ce9d6c3378f2a94a744f..da632e6a3c20ce96b76598693b91fedb3a554d56 100644
+--- a/hw/sensor/Kconfig
++++ b/hw/sensor/Kconfig
+@@ -43,3 +43,7 @@ config ISL_PMBUS_VR
+ config MAX31785
+     bool
+     depends on PMBUS
++
++config BMI270
++    bool
++    depends on I2C
+diff --git a/hw/sensor/bmi270.c b/hw/sensor/bmi270.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..917aa4d8e78f3e998b6e86b3effb2f249713c9a5
+--- /dev/null
++++ b/hw/sensor/bmi270.c
+@@ -0,0 +1,260 @@
++/*
++ * Bosch BMI270 inertial measurement unit
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ *
++ * This behavioral model implements the identification, initialization,
++ * configuration, and polled sample registers used by common StickS3 firmware.
++ */
++
++#include "qemu/osdep.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/bmi270.h"
++#include "migration/vmstate.h"
++#include "qapi/error.h"
++#include "qemu/module.h"
++
++#define BMI270_REGISTER_COUNT 0x80
++
++#define BMI270_REG_CHIP_ID 0x00
++#define BMI270_REG_STATUS 0x03
++#define BMI270_REG_ACC_X_LSB 0x0c
++#define BMI270_REG_GYR_X_LSB 0x12
++#define BMI270_REG_INT_STATUS_1 0x1d
++#define BMI270_REG_INTERNAL_STATUS 0x21
++#define BMI270_REG_ACC_RANGE 0x41
++#define BMI270_REG_GYR_RANGE 0x43
++#define BMI270_REG_INIT_CTRL 0x59
++#define BMI270_REG_INIT_DATA 0x5e
++#define BMI270_REG_PWR_CONF 0x7c
++#define BMI270_REG_CMD 0x7e
++
++#define BMI270_CHIP_ID 0x24
++#define BMI270_CMD_SOFT_RESET 0xb6
++
++OBJECT_DECLARE_SIMPLE_TYPE(BMI270State, BMI270)
++
++struct BMI270State {
++    I2CSlave parent_obj;
++
++    uint8_t registers[BMI270_REGISTER_COUNT];
++    uint8_t pointer;
++    bool expect_pointer;
++    bool init_data_stream;
++
++    int32_t accel_mg[3];
++    int32_t gyro_mdps[3];
++};
++
++static int16_t bmi270_scale(int32_t value, int32_t full_scale)
++{
++    int64_t raw = (int64_t)value * 32768 / full_scale;
++
++    raw = MAX(raw, INT16_MIN);
++    raw = MIN(raw, INT16_MAX);
++    return raw;
++}
++
++static int32_t bmi270_accel_full_scale(const BMI270State *s)
++{
++    static const int32_t ranges_mg[] = { 2000, 4000, 8000, 16000 };
++
++    return ranges_mg[s->registers[BMI270_REG_ACC_RANGE] & 0x03];
++}
++
++static int32_t bmi270_gyro_full_scale(const BMI270State *s)
++{
++    static const int32_t ranges_mdps[] = {
++        2000000, 1000000, 500000, 250000, 125000,
++    };
++    uint8_t range = s->registers[BMI270_REG_GYR_RANGE] & 0x07;
++
++    return range < ARRAY_SIZE(ranges_mdps) ? ranges_mdps[range] : 2000000;
++}
++
++static void bmi270_set_word(BMI270State *s, uint8_t reg, int16_t value)
++{
++    s->registers[reg] = value;
++    s->registers[reg + 1] = value >> 8;
++}
++
++static void bmi270_update_sample_registers(BMI270State *s)
++{
++    unsigned int axis;
++
++    for (axis = 0; axis < 3; axis++) {
++        bmi270_set_word(s, BMI270_REG_ACC_X_LSB + axis * 2,
++                        bmi270_scale(s->accel_mg[axis],
++                                     bmi270_accel_full_scale(s)));
++        bmi270_set_word(s, BMI270_REG_GYR_X_LSB + axis * 2,
++                        bmi270_scale(s->gyro_mdps[axis],
++                                     bmi270_gyro_full_scale(s)));
++    }
++}
++
++static char *bmi270_get_sample(Object *obj, Error **errp)
++{
++    BMI270State *s = BMI270(obj);
++
++    return g_strdup_printf("%d,%d,%d,%d,%d,%d",
++                           s->accel_mg[0], s->accel_mg[1], s->accel_mg[2],
++                           s->gyro_mdps[0], s->gyro_mdps[1], s->gyro_mdps[2]);
++}
++
++static void bmi270_set_sample(Object *obj, const char *value, Error **errp)
++{
++    BMI270State *s = BMI270(obj);
++    int accel[3];
++    int gyro[3];
++    char trailing;
++    unsigned int axis;
++
++    if (sscanf(value, "%d,%d,%d,%d,%d,%d%c",
++               &accel[0], &accel[1], &accel[2],
++               &gyro[0], &gyro[1], &gyro[2], &trailing) != 6) {
++        error_setg(errp, "BMI270 sample must be ax,ay,az,gx,gy,gz in mg/mdps");
++        return;
++    }
++    for (axis = 0; axis < 3; axis++) {
++        if (accel[axis] < -16000 || accel[axis] > 16000 ||
++            gyro[axis] < -2000000 || gyro[axis] > 2000000) {
++            error_setg(errp, "BMI270 sample exceeds physical model range");
++            return;
++        }
++        s->accel_mg[axis] = accel[axis];
++        s->gyro_mdps[axis] = gyro[axis];
++    }
++    bmi270_update_sample_registers(s);
++}
++
++static void bmi270_reset_registers(BMI270State *s)
++{
++    memset(s->registers, 0, sizeof(s->registers));
++    s->registers[BMI270_REG_CHIP_ID] = BMI270_CHIP_ID;
++    s->registers[BMI270_REG_STATUS] = 0xc0;
++    s->registers[BMI270_REG_INT_STATUS_1] = 0xc0;
++    s->registers[BMI270_REG_INTERNAL_STATUS] = 0x01;
++    s->registers[BMI270_REG_ACC_RANGE] = 0x02;
++    s->registers[BMI270_REG_GYR_RANGE] = 0x00;
++    s->registers[BMI270_REG_PWR_CONF] = 0x03;
++    s->pointer = 0;
++    s->expect_pointer = false;
++    s->init_data_stream = false;
++    bmi270_update_sample_registers(s);
++}
++
++static uint8_t bmi270_read_register(BMI270State *s, uint8_t reg)
++{
++    if (reg >= BMI270_REG_ACC_X_LSB && reg < BMI270_REG_GYR_X_LSB + 6) {
++        bmi270_update_sample_registers(s);
++    }
++    return reg < BMI270_REGISTER_COUNT ? s->registers[reg] : 0;
++}
++
++static void bmi270_write_register(BMI270State *s, uint8_t reg, uint8_t value)
++{
++    if (reg >= BMI270_REGISTER_COUNT || reg == BMI270_REG_CHIP_ID) {
++        return;
++    }
++    if (reg == BMI270_REG_CMD && value == BMI270_CMD_SOFT_RESET) {
++        bmi270_reset_registers(s);
++        return;
++    }
++
++    s->registers[reg] = value;
++    if (reg == BMI270_REG_INIT_CTRL && value == 0x01) {
++        s->registers[BMI270_REG_INTERNAL_STATUS] = 0x01;
++    }
++}
++
++static int bmi270_event(I2CSlave *i2c, enum i2c_event event)
++{
++    BMI270State *s = BMI270(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->expect_pointer = true;
++    }
++    return 0;
++}
++
++static int bmi270_send(I2CSlave *i2c, uint8_t data)
++{
++    BMI270State *s = BMI270(i2c);
++
++    if (s->expect_pointer) {
++        s->pointer = data;
++        s->expect_pointer = false;
++        s->init_data_stream = data == BMI270_REG_INIT_DATA;
++    } else if (s->init_data_stream) {
++        /* Configuration bytes use INIT_DATA as a streaming data port. */
++    } else {
++        bmi270_write_register(s, s->pointer++, data);
++    }
++    return 0;
++}
++
++static uint8_t bmi270_recv(I2CSlave *i2c)
++{
++    BMI270State *s = BMI270(i2c);
++
++    return bmi270_read_register(s, s->pointer++);
++}
++
++static void bmi270_reset(DeviceState *dev)
++{
++    bmi270_reset_registers(BMI270(dev));
++}
++
++static void bmi270_init(Object *obj)
++{
++    BMI270State *s = BMI270(obj);
++
++    s->accel_mg[2] = 1000;
++    object_property_add_str(obj, "sample", bmi270_get_sample,
++                            bmi270_set_sample);
++}
++
++static const VMStateDescription vmstate_bmi270 = {
++    .name = TYPE_BMI270,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, BMI270State),
++        VMSTATE_UINT8_ARRAY(registers, BMI270State, BMI270_REGISTER_COUNT),
++        VMSTATE_UINT8(pointer, BMI270State),
++        VMSTATE_BOOL(expect_pointer, BMI270State),
++        VMSTATE_BOOL(init_data_stream, BMI270State),
++        VMSTATE_INT32_ARRAY(accel_mg, BMI270State, 3),
++        VMSTATE_INT32_ARRAY(gyro_mdps, BMI270State, 3),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void bmi270_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *sc = I2C_SLAVE_CLASS(klass);
++
++    device_class_set_legacy_reset(dc, bmi270_reset);
++    dc->vmsd = &vmstate_bmi270;
++    sc->event = bmi270_event;
++    sc->recv = bmi270_recv;
++    sc->send = bmi270_send;
++}
++
++static const TypeInfo bmi270_info = {
++    .name = TYPE_BMI270,
++    .parent = TYPE_I2C_SLAVE,
++    .instance_size = sizeof(BMI270State),
++    .instance_init = bmi270_init,
++    .class_init = bmi270_class_init,
++};
++
++static void bmi270_register_types(void)
++{
++    type_register_static(&bmi270_info);
++}
++
++type_init(bmi270_register_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index 420fdc335927b0b265600da03f50bbd880f37cf7..fec41e615c4b2fcd4e4f346e105044aa80c2d566 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -8,3 +8,4 @@ system_ss.add(when: 'CONFIG_MAX34451', if_true: files('max34451.c'))
+ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
++system_ss.add(when: 'CONFIG_BMI270', if_true: files('bmi270.c'))
+diff --git a/hw/xtensa/Kconfig b/hw/xtensa/Kconfig
+index 9fcdeaa70baef4886d8315deb55dc78d69291995..010570cb0bf93615ce6476ed978b97e2ea84e4b6 100644
+--- a/hw/xtensa/Kconfig
++++ b/hw/xtensa/Kconfig
+@@ -45,4 +45,6 @@ config XTENSA_ESP32S3
+     select TMP105
+     select ESP_RGB
+     select TCA8418
+-
++    select STICKS3_BUTTONS
++    select BMI270
++    select M5PM1
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+index ea9ee7b6160c85643532e7f285f681f27abc3788..541b19276ed356ba42d420252a5b99ea26727fff 100644
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -65,6 +65,10 @@
+ #include "hw/display/st7789.h"
+ #include "hw/i2c/esp32_i2c.h"
+ #include "hw/input/tca8418.h"
++#include "hw/input/sticks3_buttons.h"
++#include "hw/sensor/bmi270.h"
++#include "hw/misc/m5pm1.h"
++#include "monitor/qdev.h"
+ #include "hw/misc/esp32s3_xts_aes.h"
+ #include "hw/misc/esp32s3_pms.h"
+ #include "hw/net/can/esp32s3_twai.h"
+@@ -677,6 +681,9 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+     I2CBus *i2c_bus;
+     I2CSlave *keyboard;
+     qemu_irq keyboard_irq;
++    DeviceState *buttons;
++    I2CSlave *imu;
++    I2CSlave *pmic;
+     DeviceState *display;
+     qemu_irq display_dc;
+     qemu_irq display_reset;
+@@ -709,6 +716,29 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+         dc_pin = 34;
+         reset_pin = 33;
+     } else {
++        buttons = qdev_new(TYPE_STICKS3_BUTTONS);
++        qdev_set_id(buttons, g_strdup("sticks3-buttons"), &error_fatal);
++        qdev_realize_and_unref(buttons, NULL, &error_fatal);
++        qdev_connect_gpio_out_named(
++            buttons, "button", 0,
++            qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 11));
++        qdev_connect_gpio_out_named(
++            buttons, "button", 1,
++            qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 12));
++        qemu_set_irq(qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 11),
++                     1);
++        qemu_set_irq(qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 12),
++                     1);
++
++        i2c_master = DEVICE(&soc->i2c[0]);
++        i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
++        imu = i2c_slave_new(TYPE_BMI270, 0x68);
++        qdev_set_id(DEVICE(imu), g_strdup("sticks3-imu"), &error_fatal);
++        i2c_slave_realize_and_unref(imu, i2c_bus, &error_fatal);
++        pmic = i2c_slave_new(TYPE_M5PM1, 0x6e);
++        qdev_set_id(DEVICE(pmic), g_strdup("sticks3-pmic"), &error_fatal);
++        i2c_slave_realize_and_unref(pmic, i2c_bus, &error_fatal);
++
+         display_width = 135;
+         display_height = 240;
+         display_offset_x = 52;
+diff --git a/include/hw/input/sticks3_buttons.h b/include/hw/input/sticks3_buttons.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..b8af98a75439f442f4088f02b59ce4ef570cac8d
+--- /dev/null
++++ b/include/hw/input/sticks3_buttons.h
+@@ -0,0 +1,16 @@
++/*
++ * M5Stack StickS3 physical buttons
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef HW_INPUT_STICKS3_BUTTONS_H
++#define HW_INPUT_STICKS3_BUTTONS_H
++
++#include "hw/qdev-core.h"
++
++#define TYPE_STICKS3_BUTTONS "sticks3-buttons"
++
++#endif
+diff --git a/include/hw/misc/m5pm1.h b/include/hw/misc/m5pm1.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4dbdacf43a684733e35dcc3cfad090b7a6836b2
+--- /dev/null
++++ b/include/hw/misc/m5pm1.h
+@@ -0,0 +1,14 @@
++/*
++ * M5Stack M5PM1 power management controller
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef HW_MISC_M5PM1_H
++#define HW_MISC_M5PM1_H
++
++#define TYPE_M5PM1 "m5pm1"
++
++#endif
+diff --git a/include/hw/sensor/bmi270.h b/include/hw/sensor/bmi270.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..3293adda03f295ab711bad61dbeb04b36606f671
+--- /dev/null
++++ b/include/hw/sensor/bmi270.h
+@@ -0,0 +1,14 @@
++/*
++ * Bosch BMI270 inertial measurement unit
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef HW_SENSOR_BMI270_H
++#define HW_SENSOR_BMI270_H
++
++#define TYPE_BMI270 "bmi270"
++
++#endif
+--
+2.43.0

@@ -83,3 +83,21 @@ async def test_execute_qmp_surfaces_command_errors(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(qmp.asyncio, "open_unix_connection", open_connection)
     with pytest.raises(qmp.QmpCommandError, match="bad key"):
         await qmp.execute_qmp(Path("/runtime/qmp.sock"), "input-send-event")
+
+
+async def test_execute_qmp_preserves_scalar_qom_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = qmp_reader(
+        {"QMP": {"version": {"qemu": {"major": 9}}}},
+        {"return": {}, "id": "capabilities"},
+        {"return": True, "id": "command"},
+    )
+    writer = FakeWriter()
+
+    async def open_connection(_path: Path) -> tuple[asyncio.StreamReader, FakeWriter]:
+        return reader, writer
+
+    monkeypatch.setattr(qmp.asyncio, "open_unix_connection", open_connection)
+
+    assert await qmp.execute_qmp(Path("/runtime/qmp.sock"), "qom-get") is True

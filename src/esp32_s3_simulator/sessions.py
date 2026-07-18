@@ -15,7 +15,7 @@ from uuid import uuid4
 from .boards import BoardProfile
 from .firmware import ValidatedFirmware, validate_and_pad_firmware, write_private_flash_image
 from .framebuffer import RGBFrame, encode_framebuffer_packet, parse_qemu_ppm
-from .inputs import qmp_key_event
+from .inputs import qmp_button_event, qmp_imu_sample, qmp_key_event, qmp_power_state
 from .qemu import QemuWorkerConfig, build_qemu_command
 from .qmp import QmpUnavailableError, execute_qmp
 from .settings import Settings
@@ -198,6 +198,46 @@ class SessionManager:
         arguments = qmp_key_event(session.board, key, pressed)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "input-send-event", arguments)
+
+    async def send_button(self, session_id: str, button: str, pressed: bool) -> None:
+        session = self.get(session_id)
+        self._require_board_input(session)
+        arguments = qmp_button_event(session.board, button, pressed)
+        async with session.qmp_lock:
+            await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+
+    async def set_imu_sample(
+        self,
+        session_id: str,
+        acceleration_g: tuple[float, float, float],
+        angular_velocity_dps: tuple[float, float, float],
+    ) -> None:
+        session = self.get(session_id)
+        self._require_board_input(session)
+        arguments = qmp_imu_sample(
+            session.board, acceleration_g, angular_velocity_dps
+        )
+        async with session.qmp_lock:
+            await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+
+    async def set_power_state(
+        self,
+        session_id: str,
+        battery_mv: int,
+        vin_mv: int,
+        charging: bool,
+    ) -> None:
+        session = self.get(session_id)
+        self._require_board_input(session)
+        arguments = qmp_power_state(session.board, battery_mv, vin_mv, charging)
+        async with session.qmp_lock:
+            await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+
+    def _require_board_input(self, session: SessionRecord) -> None:
+        if session.state is not SessionState.RUNNING:
+            raise RuntimeError("session board input is not available")
+        if not self._settings.worker_qmp_enabled:
+            raise QmpUnavailableError("QMP board input is disabled for this worker")
 
     async def pause(self, session_id: str) -> SessionRecord:
         session = self.get(session_id)

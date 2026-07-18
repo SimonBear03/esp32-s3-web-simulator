@@ -36,6 +36,14 @@ dummy cycles to QEMU's serialized GigaDevice flash model. It also fixes the SPI
 transfer-buffer index checks. The owned StickS3 fixture validates the real
 `qio_opi` configuration with exact 8 MiB PSRAM and NVS readback across reset.
 
+`patches/0006-esp32s3-sticks3-buttons-imu-power.patch` adds active-low
+StickS3 buttons on GPIO 11/12, a behavioral BMI270 at I2C address `0x68`, and
+a behavioral M5PM1 at `0x6e`. Dedicated QOM properties let the private worker
+inject button transitions, physical-unit IMU samples, battery voltage, input
+voltage, and charging state deterministically. These values reach firmware
+through the normal GPIO and I2C paths; the model does not claim analog
+electrical, noise, calibration, or brownout fidelity.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:
@@ -58,7 +66,8 @@ gitignored `.cache/qemu/` directory, applies the tracked patches in order, and b
 
 Workers select the board model with `-M esp32s3,board-profile=cardputer-adv`
 or `-M esp32s3,board-profile=sticks3`. The service translates its stable input
-protocol to QMP `input-send-event`; browser clients never need QEMU key codes.
+protocol to private QMP keyboard and QOM operations; browser clients never need
+QEMU key codes or object paths.
 The service captures the board framebuffer through QMP and validates QEMU's P6
 RGB output before exposing it through the engine-neutral web protocol.
 

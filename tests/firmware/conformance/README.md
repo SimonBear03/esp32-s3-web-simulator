@@ -4,6 +4,8 @@ This simulator-owned fixture is the release gate for the base ESP32-S3 worker.
 It emits a stable UART contract for boot, flash capacity, heap, NVS persistence,
 timers, heartbeat continuity, byte-stream input, software reset, ESP32-S3 I2C,
 TCA8418 key-event delivery, ESP32-S3 SPI3, and ST7789 framebuffer output.
+The StickS3 build also gates GPIO buttons, BMI270 samples, M5PM1 power state,
+and octal PSRAM.
 
 ## Build
 
@@ -45,10 +47,15 @@ Successful base conformance requires:
   assertions when the StickS3 fixture is selected;
 - StickS3 octal-PSRAM initialization, an exact 8 MiB capacity assertion, and a
   deterministic 4 KiB allocation/write/read/free test;
+- StickS3 button A/B press and release transitions reaching active-low GPIO
+  11/12;
+- BMI270 identity `0x24` at I2C address `0x68`, a stationary default sample,
+  and an injected 1 g X / 250 dps Z sample read back as deterministic raw data;
+- M5PM1 identity at I2C address `0x6e`, default battery/VIN/charging telemetry,
+  and an injected battery-only, charging-off state read back through registers;
 - `reset\n` producing another boot sequence without replacing the flash image.
 
-Board-specific keyboard/button, PSRAM, power, and sensor fixtures will extend
-this base contract rather than weakening it.
+Later board models extend this contract rather than weakening it.
 
 From the repository root, exercise the built image through the real session
 service with:

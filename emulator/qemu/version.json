@@ -22,6 +22,7 @@
     "patches/0002-esp32s3-i2c-cardputer-tca8418.patch",
     "patches/0003-esp32s3-gpio-input-interrupts.patch",
     "patches/0004-esp32s3-gpspi-st7789.patch",
-    "patches/0005-esp32s3-sticks3-octal-psram-qio.patch"
+    "patches/0005-esp32s3-sticks3-octal-psram-qio.patch",
+    "patches/0006-esp32s3-sticks3-buttons-imu-power.patch"
   ]
 }

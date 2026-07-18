@@ -43,9 +43,9 @@ client-side WebAssembly engine can implement the same contract.
 
 - ESP32-S3-PICO-1-N8R8 with 8 MB flash and 8 MB PSRAM
 - ST7789-compatible 135 x 240 display path
-- physical button inputs
-- logical power/battery states and NVS
-- virtual BMI270 input after the base device is conformant
+- active-low physical button inputs on GPIO 11/12
+- M5PM1 logical power/battery states and NVS
+- deterministic virtual BMI270 input
 
 ## Application Compatibility Milestones
 

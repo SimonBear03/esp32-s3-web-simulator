@@ -25,7 +25,9 @@ display models with correctly sized RGB framebuffers and live binary WebSocket
 streaming. Both profiles are covered by real compiled firmware, exact pixel
 assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
 passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
-debugger, and hosted-web milestones remain in progress.
+and button input are now live on StickS3; its behavioral BMI270 and M5PM1 models
+accept deterministic runtime samples through the typed web protocol. Cardputer
+power, debugger, and hosted-web milestones remain in progress.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. A successful first
@@ -53,7 +55,8 @@ licensing boundaries.
 ## Development
 
 The emulator baseline is Espressif QEMU 9.2.2 built from a pinned source commit
-with tracked flash, I2C, GPIO, keyboard, SPI, display, and octal-PSRAM patches. See
+with tracked flash, I2C, GPIO, keyboard/button, SPI, display, PSRAM, IMU, and
+power-controller patches. See
 [emulator/qemu/README.md](emulator/qemu/README.md) for native prerequisites and
 the reproducible build command.
 

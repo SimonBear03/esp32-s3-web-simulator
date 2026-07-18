@@ -32,7 +32,7 @@ async def _read_message(reader: asyncio.StreamReader) -> dict[str, Any]:
     raise QmpUnavailableError("QEMU closed the QMP connection")
 
 
-async def _read_response(reader: asyncio.StreamReader, request_id: str) -> dict[str, Any]:
+async def _read_response(reader: asyncio.StreamReader, request_id: str) -> Any:
     while True:
         message = await _read_message(reader)
         if message.get("id") != request_id:
@@ -44,8 +44,7 @@ async def _read_response(reader: asyncio.StreamReader, request_id: str) -> dict[
                 else str(error)
             )
             raise QmpCommandError(description)
-        result = message.get("return")
-        return result if isinstance(result, dict) else {}
+        return message.get("return")
 
 
 async def _open_qmp(
@@ -70,7 +69,7 @@ async def execute_qmp(
     arguments: dict[str, Any] | None = None,
     *,
     timeout_seconds: float = 2,
-) -> dict[str, Any]:
+) -> Any:
     """Execute one QMP command over a private worker socket."""
 
     reader: asyncio.StreamReader
