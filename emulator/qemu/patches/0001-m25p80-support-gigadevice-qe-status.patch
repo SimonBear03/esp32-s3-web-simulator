@@ -1,0 +1,42 @@
+From: ESP32-S3 Web Simulator contributors
+Subject: [PATCH] m25p80: support GigaDevice status register 2 QE bit
+
+ESP-IDF 4.4 initializes the 8 MiB GigaDevice flash selected by the ESP32-S3
+machine by reading status register 2 with 0x35, writing its QE bit with 0x31,
+and reading it back. The model only implemented those status-register-2 paths
+for Winbond, so the write payload was decoded as a new command and default
+flash initialization failed.
+
+GigaDevice uses the same status-register-2 QE bit position for this path. Apply
+the existing Winbond behavior to GigaDevice parts as well.
+
+SPDX-License-Identifier: GPL-2.0-only
+---
+ hw/block/m25p80.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hw/block/m25p80.c b/hw/block/m25p80.c
+--- a/hw/block/m25p80.c
++++ b/hw/block/m25p80.c
+@@ -834,6 +834,7 @@ static void complete_collecting_data(Flash *s)
+         break;
+     case WRSR2:
+         switch (get_man(s)) {
++        case MAN_GIGADEVICE:
+         case MAN_WINBOND:
+             s->quad_enable = !!(s->data[0] & 0x02);
+             break;
+@@ -1322,4 +1323,5 @@ static void decode_new_cmd(Flash *s, uint32_t value)
+         switch (get_man(s)) {
++        case MAN_GIGADEVICE:
+         case MAN_WINBOND:
+             s->needed_bytes = 1;
+             s->state = STATE_COLLECTING_DATA;
+@@ -1499,6 +1501,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
+         case MAN_MACRONIX:
+             s->quad_enable = true;
+             break;
++        case MAN_GIGADEVICE:
+         case MAN_WINBOND:
+             s->data[0] = (!!s->quad_enable) << 1;
+             s->pos = 0;

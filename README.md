@@ -43,14 +43,28 @@ licensing boundaries.
 
 ## Development
 
-Implementation tooling and validation commands have not been selected yet.
-Before importing emulator code or firmware/ROM artifacts, settle and document
-the repository's component licences and third-party redistribution terms.
+The emulator baseline is Espressif QEMU 9.2.2 built from a pinned source commit
+with a tracked ESP-IDF 4.4 flash-compatibility patch. See
+[emulator/qemu/README.md](emulator/qemu/README.md) for native prerequisites and
+the reproducible build command.
+
+Licensing and redistribution decisions are recorded in
+[docs/licensing.md](docs/licensing.md) and [THIRD_PARTY.md](THIRD_PARTY.md).
+Firmware, ROMs, emulator binaries, and runtime session state are never committed.
+The release-gate policy and current boot-spike evidence live in
+[docs/conformance.md](docs/conformance.md).
+
+Run the repository foundation checks with:
+
+```sh
+make check
+```
 
 ## Remote
 
-No GitHub remote is configured. It will be linked after the upstream repository
-is created.
+`origin` points to the public GitHub repository:
+
+`git@github.com:SimonBear03/esp32-s3-web-simulator.git`
 
 ## Licence
 

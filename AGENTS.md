@@ -34,23 +34,22 @@ Before meaningful edits, classify the task:
 ## Branching And Git
 
 - Keep `main` buildable and easy to pull.
-- Use the current checkout and a short-lived `feat/`, `fix/`, `docs/`, or
-  `spike/` branch for nontrivial work.
-- If the checkout is clean and on `main`, create the branch before meaningful
-  implementation work.
+- Simon has authorized direct work on `main` for the initial simulator build.
+  Keep each commit coherent and validated so `main` remains usable throughout
+  the build.
+- Use a short-lived branch only when Simon requests one or a later experiment
+  should not land incrementally on `main`.
 - Inspect dirty changes before pulling, committing, or pushing.
 - Commit only coherent, reviewed, validated work.
-- Do not merge into `main` without Simon's explicit request.
 - Do not reset, stash, clean, force-push, or discard work unless Simon
   explicitly asks.
 
 ## Validation
 
-The repository is currently documentation-only. Until implementation tooling
-is selected, validate foundation changes with:
+Run the foundation checks with:
 
 ```sh
-git diff --check
+make check
 ```
 
 Document and run component-specific tests as soon as code is introduced.

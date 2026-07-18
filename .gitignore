@@ -1,24 +1,44 @@
-.env
-.env.*
-!.env.example
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
 
+# JavaScript
 node_modules/
 dist/
 build/
 .next/
 .turbo/
-.cache/
+.vite/
 coverage/
 
+# Simulator runtime
+.runtime/
+.cache/
+uploads/
+sessions/
+*.flash.bin
+*.nvs.bin
+*.qcow2
 *.log
 *.tmp
-.DS_Store
 
+# Firmware build outputs
 .pio/
 *.bin
 *.elf
 *.map
 
-.runtime/
+# Local configuration
+.env
+.env.*
+!.env.example
 .secrets/
 .locks/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,23 @@
+{
+  "component": "Espressif QEMU",
+  "repository": "https://github.com/espressif/qemu.git",
+  "tag": "esp-develop-9.2.2-20260417",
+  "commit": "40edccac415693c5130f91c01d84176ae6008566",
+  "source_archive": {
+    "url": "https://github.com/espressif/qemu/archive/refs/tags/esp-develop-9.2.2-20260417.tar.gz",
+    "sha256": "113bbae7d27dd39682c424e06ae18b0ec023ba8e4ab6754647116336557132c9"
+  },
+  "official_x86_64_release": {
+    "asset": "qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz",
+    "sha256": "0eecb2a34a5586c0e59110f77b9343b7b336e82fdb0e1a30e1dc1bab8a547e35"
+  },
+  "submodules": {
+    "dtc": "b6910bec11614980a21e46fbccc35934b671bd81",
+    "keycodemapdb": "f5772a62ec52591ff6870b7e8ef32482371f22c6",
+    "berkeley-softfloat-3": "b64af41c3276f97f0e181920400ee056b9c88037",
+    "berkeley-testfloat-3": "e7af9751d9f9fd3b47911f51a5cfd08af256a9ab"
+  },
+  "patches": [
+    "patches/0001-m25p80-support-gigadevice-qe-status.patch"
+  ]
+}
