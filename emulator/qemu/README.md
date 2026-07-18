@@ -18,6 +18,12 @@ explicit `cardputer-adv` and `sticks3` machine profiles, and attaches an
 original TCA8418 keyboard model to the Cardputer ADV profile. Both patches are
 GPL-2.0-only and covered by real-firmware conformance tests.
 
+`patches/0003-esp32s3-gpio-input-interrupts.patch` adds the ESP32-S3 GPIO
+input/output/status register subset, edge and level interrupt behavior, and the
+GPIO interrupt-matrix route. It connects the TCA8418 active-low interrupt to
+Cardputer ADV GPIO 11, allowing the normal ESP-IDF ISR path to consume keys
+without firmware polling.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:

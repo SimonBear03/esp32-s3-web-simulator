@@ -1,0 +1,427 @@
+diff --git a/hw/gpio/esp32_gpio.c b/hw/gpio/esp32_gpio.c
+index 4fea1f5cc736778f4bb6fca8a27116baf9d73569..62478097a3f5203d397b3beec69269dcf448fc8e 100644
+--- a/hw/gpio/esp32_gpio.c
++++ b/hw/gpio/esp32_gpio.c
+@@ -19,6 +19,141 @@
+ #include "hw/qdev-properties.h"
+ #include "hw/gpio/esp32_gpio.h"
+
++#define S3_GPIO_OUT 0x04
++#define S3_GPIO_OUT_W1TS 0x08
++#define S3_GPIO_OUT_W1TC 0x0c
++#define S3_GPIO_OUT1 0x10
++#define S3_GPIO_OUT1_W1TS 0x14
++#define S3_GPIO_OUT1_W1TC 0x18
++#define S3_GPIO_ENABLE 0x20
++#define S3_GPIO_ENABLE_W1TS 0x24
++#define S3_GPIO_ENABLE_W1TC 0x28
++#define S3_GPIO_ENABLE1 0x2c
++#define S3_GPIO_ENABLE1_W1TS 0x30
++#define S3_GPIO_ENABLE1_W1TC 0x34
++#define S3_GPIO_IN 0x3c
++#define S3_GPIO_IN1 0x40
++#define S3_GPIO_STATUS 0x44
++#define S3_GPIO_STATUS_W1TS 0x48
++#define S3_GPIO_STATUS_W1TC 0x4c
++#define S3_GPIO_STATUS1 0x50
++#define S3_GPIO_STATUS1_W1TS 0x54
++#define S3_GPIO_STATUS1_W1TC 0x58
++#define S3_GPIO_PCPU_INT 0x5c
++#define S3_GPIO_PCPU_INT1 0x68
++#define S3_GPIO_PIN_BASE 0x74
++
++#define S3_GPIO_PIN_INT_TYPE_SHIFT 7
++#define S3_GPIO_PIN_INT_TYPE_MASK 0x7
++#define S3_GPIO_PIN_INT_ENA_SHIFT 13
++#define S3_GPIO_PIN_INT_ENA_MASK 0x1f
++
++enum {
++    S3_GPIO_INTR_DISABLE = 0,
++    S3_GPIO_INTR_POSEDGE = 1,
++    S3_GPIO_INTR_NEGEDGE = 2,
++    S3_GPIO_INTR_ANYEDGE = 3,
++    S3_GPIO_INTR_LOW_LEVEL = 4,
++    S3_GPIO_INTR_HIGH_LEVEL = 5,
++};
++
++static uint64_t esp32_gpio_enabled_interrupts(Esp32GpioState *s)
++{
++    uint64_t enabled = 0;
++
++    for (unsigned int pin = 0; pin < s->pin_count; pin++) {
++        if ((s->pin_config[pin] >> S3_GPIO_PIN_INT_ENA_SHIFT) &
++            S3_GPIO_PIN_INT_ENA_MASK) {
++            enabled |= BIT_ULL(pin);
++        }
++    }
++    return enabled;
++}
++
++static void esp32_gpio_update_irq(Esp32GpioState *s)
++{
++    qemu_set_irq(s->irq,
++                 !!(s->interrupt_status & esp32_gpio_enabled_interrupts(s)));
++}
++
++static void esp32_gpio_update_outputs(Esp32GpioState *s, uint64_t changed)
++{
++    changed &= MAKE_64BIT_MASK(0, s->pin_count);
++    while (changed) {
++        unsigned int pin = ctz64(changed);
++        bool level = (s->output_enable & s->output_level) & BIT_ULL(pin);
++
++        qemu_set_irq(s->pin_out[pin], level);
++        changed &= ~BIT_ULL(pin);
++    }
++}
++
++static bool esp32_gpio_level_triggered(Esp32GpioState *s, unsigned int pin)
++{
++    unsigned int type = (s->pin_config[pin] >> S3_GPIO_PIN_INT_TYPE_SHIFT) &
++                        S3_GPIO_PIN_INT_TYPE_MASK;
++    bool level = s->input_level & BIT_ULL(pin);
++
++    return (type == S3_GPIO_INTR_LOW_LEVEL && !level) ||
++           (type == S3_GPIO_INTR_HIGH_LEVEL && level);
++}
++
++static void esp32_gpio_reassert_levels(Esp32GpioState *s, uint64_t pins)
++{
++    for (unsigned int pin = 0; pin < s->pin_count; pin++) {
++        if ((pins & BIT_ULL(pin)) && esp32_gpio_level_triggered(s, pin)) {
++            s->interrupt_status |= BIT_ULL(pin);
++        }
++    }
++}
++
++static void esp32_gpio_set_input(void *opaque, int pin, int level)
++{
++    Esp32GpioState *s = ESP32_GPIO(opaque);
++    uint64_t mask;
++    bool previous;
++    unsigned int type;
++    bool triggered = false;
++
++    if (pin < 0 || pin >= s->pin_count) {
++        return;
++    }
++
++    mask = BIT_ULL(pin);
++    previous = s->input_level & mask;
++    if (level) {
++        s->input_level |= mask;
++    } else {
++        s->input_level &= ~mask;
++    }
++
++    type = (s->pin_config[pin] >> S3_GPIO_PIN_INT_TYPE_SHIFT) &
++           S3_GPIO_PIN_INT_TYPE_MASK;
++    switch (type) {
++    case S3_GPIO_INTR_POSEDGE:
++        triggered = !previous && level;
++        break;
++    case S3_GPIO_INTR_NEGEDGE:
++        triggered = previous && !level;
++        break;
++    case S3_GPIO_INTR_ANYEDGE:
++        triggered = previous != level;
++        break;
++    case S3_GPIO_INTR_LOW_LEVEL:
++        triggered = !level;
++        break;
++    case S3_GPIO_INTR_HIGH_LEVEL:
++        triggered = level;
++        break;
++    default:
++        break;
++    }
++
++    if (triggered) {
++        s->interrupt_status |= mask;
++    }
++    esp32_gpio_update_irq(s);
++}
+
+
+ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+@@ -29,8 +164,49 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+     case A_GPIO_STRAP:
+         r = s->strap_mode;
+         break;
+-
+     default:
++        if (!s->s3_mode) {
++            break;
++        }
++        switch (addr) {
++        case S3_GPIO_OUT:
++            r = s->output_level;
++            break;
++        case S3_GPIO_OUT1:
++            r = s->output_level >> 32;
++            break;
++        case S3_GPIO_ENABLE:
++            r = s->output_enable;
++            break;
++        case S3_GPIO_ENABLE1:
++            r = s->output_enable >> 32;
++            break;
++        case S3_GPIO_IN:
++            r = s->input_level;
++            break;
++        case S3_GPIO_IN1:
++            r = s->input_level >> 32;
++            break;
++        case S3_GPIO_STATUS:
++            r = s->interrupt_status;
++            break;
++        case S3_GPIO_STATUS1:
++            r = s->interrupt_status >> 32;
++            break;
++        case S3_GPIO_PCPU_INT:
++            r = s->interrupt_status & esp32_gpio_enabled_interrupts(s);
++            break;
++        case S3_GPIO_PCPU_INT1:
++            r = (s->interrupt_status & esp32_gpio_enabled_interrupts(s)) >> 32;
++            break;
++        default:
++            if (addr >= S3_GPIO_PIN_BASE &&
++                addr < S3_GPIO_PIN_BASE + s->pin_count * sizeof(uint32_t) &&
++                !(addr & 3)) {
++                r = s->pin_config[(addr - S3_GPIO_PIN_BASE) / sizeof(uint32_t)];
++            }
++            break;
++        }
+         break;
+     }
+     return r;
+@@ -39,9 +215,106 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+ static void esp32_gpio_write(void *opaque, hwaddr addr,
+                        uint64_t value, unsigned int size)
+ {
++    Esp32GpioState *s = ESP32_GPIO(opaque);
++    uint64_t mask = value;
++    uint64_t changed = 0;
++
++    if (!s->s3_mode) {
++        return;
++    }
++
++    switch (addr) {
++    case S3_GPIO_OUT:
++        changed = s->output_level ^ (uint32_t)value;
++        s->output_level = (s->output_level & ~UINT32_MAX) | (uint32_t)value;
++        break;
++    case S3_GPIO_OUT_W1TS:
++        changed = ~s->output_level & (uint32_t)value;
++        s->output_level |= (uint32_t)value;
++        break;
++    case S3_GPIO_OUT_W1TC:
++        changed = s->output_level & (uint32_t)value;
++        s->output_level &= ~(uint64_t)(uint32_t)value;
++        break;
++    case S3_GPIO_OUT1:
++        mask <<= 32;
++        changed = (s->output_level ^ mask) & (UINT64_MAX << 32);
++        s->output_level = (s->output_level & UINT32_MAX) | mask;
++        break;
++    case S3_GPIO_OUT1_W1TS:
++        mask <<= 32;
++        changed = ~s->output_level & mask;
++        s->output_level |= mask;
++        break;
++    case S3_GPIO_OUT1_W1TC:
++        mask <<= 32;
++        changed = s->output_level & mask;
++        s->output_level &= ~mask;
++        break;
++    case S3_GPIO_ENABLE:
++        changed = s->output_enable ^ (uint32_t)value;
++        s->output_enable = (s->output_enable & ~UINT32_MAX) | (uint32_t)value;
++        break;
++    case S3_GPIO_ENABLE_W1TS:
++        changed = ~s->output_enable & (uint32_t)value;
++        s->output_enable |= (uint32_t)value;
++        break;
++    case S3_GPIO_ENABLE_W1TC:
++        changed = s->output_enable & (uint32_t)value;
++        s->output_enable &= ~(uint64_t)(uint32_t)value;
++        break;
++    case S3_GPIO_ENABLE1:
++        mask <<= 32;
++        changed = (s->output_enable ^ mask) & (UINT64_MAX << 32);
++        s->output_enable = (s->output_enable & UINT32_MAX) | mask;
++        break;
++    case S3_GPIO_ENABLE1_W1TS:
++        mask <<= 32;
++        changed = ~s->output_enable & mask;
++        s->output_enable |= mask;
++        break;
++    case S3_GPIO_ENABLE1_W1TC:
++        mask <<= 32;
++        changed = s->output_enable & mask;
++        s->output_enable &= ~mask;
++        break;
++    case S3_GPIO_STATUS_W1TS:
++        s->interrupt_status |= (uint32_t)value;
++        esp32_gpio_update_irq(s);
++        return;
++    case S3_GPIO_STATUS_W1TC:
++        mask = (uint32_t)value;
++        s->interrupt_status &= ~mask;
++        esp32_gpio_reassert_levels(s, mask);
++        esp32_gpio_update_irq(s);
++        return;
++    case S3_GPIO_STATUS1_W1TS:
++        s->interrupt_status |= mask << 32;
++        esp32_gpio_update_irq(s);
++        return;
++    case S3_GPIO_STATUS1_W1TC:
++        mask <<= 32;
++        s->interrupt_status &= ~mask;
++        esp32_gpio_reassert_levels(s, mask);
++        esp32_gpio_update_irq(s);
++        return;
++    default:
++        if (addr >= S3_GPIO_PIN_BASE &&
++            addr < S3_GPIO_PIN_BASE + s->pin_count * sizeof(uint32_t) &&
++            !(addr & 3)) {
++            unsigned int pin = (addr - S3_GPIO_PIN_BASE) / sizeof(uint32_t);
++
++            s->pin_config[pin] = value;
++            esp32_gpio_reassert_levels(s, BIT_ULL(pin));
++            esp32_gpio_update_irq(s);
++        }
++        return;
++    }
++
++    esp32_gpio_update_outputs(s, changed);
+ }
+
+-static const MemoryRegionOps uart_ops = {
++static const MemoryRegionOps gpio_ops = {
+     .read =  esp32_gpio_read,
+     .write = esp32_gpio_write,
+     .endianness = DEVICE_LITTLE_ENDIAN,
+@@ -49,6 +322,14 @@ static const MemoryRegionOps uart_ops = {
+
+ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
+ {
++    Esp32GpioState *s = ESP32_GPIO(obj);
++
++    s->output_level = 0;
++    s->output_enable = 0;
++    s->interrupt_status = 0;
++    memset(s->pin_config, 0, sizeof(s->pin_config));
++    esp32_gpio_update_outputs(s, MAKE_64BIT_MASK(0, s->pin_count));
++    esp32_gpio_update_irq(s);
+ }
+
+ static void esp32_gpio_realize(DeviceState *dev, Error **errp)
+@@ -63,16 +344,22 @@ static void esp32_gpio_init(Object *obj)
+     /* Set the default value for the strap_mode property */
+     object_property_set_int(obj, "strap_mode", ESP32_STRAP_MODE_FLASH_BOOT, &error_fatal);
+
+-    memory_region_init_io(&s->iomem, obj, &uart_ops, s,
++    memory_region_init_io(&s->iomem, obj, &gpio_ops, s,
+                           TYPE_ESP32_GPIO, 0x1000);
+     sysbus_init_mmio(sbd, &s->iomem);
+     sysbus_init_irq(sbd, &s->irq);
++    qdev_init_gpio_in_named(DEVICE(obj), esp32_gpio_set_input, "gpio-in",
++                            ESP32_GPIO_MAX_PINS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->pin_out, "gpio-out",
++                             ESP32_GPIO_MAX_PINS);
+ }
+
+ static Property esp32_gpio_properties[] = {
+     /* The strap_mode needs to be explicitly set in the instance init, thus, set
+      * the default value to 0. */
+     DEFINE_PROP_UINT32("strap_mode", Esp32GpioState, strap_mode, 0),
++    DEFINE_PROP_UINT32("pin-count", Esp32GpioState, pin_count, 40),
++    DEFINE_PROP_BOOL("s3-mode", Esp32GpioState, s3_mode, false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+
+diff --git a/hw/gpio/esp32s3_gpio.c b/hw/gpio/esp32s3_gpio.c
+index 0a0e4774e96757fd648b3c32e84efffc62194859..a1faa7e58d4c1ab245d25a5db45040d3fce4b06b 100644
+--- a/hw/gpio/esp32s3_gpio.c
++++ b/hw/gpio/esp32s3_gpio.c
+@@ -24,6 +24,8 @@ static void esp32s3_gpio_init(Object *obj)
+ {
+     /* Set the default value for the property */
+     object_property_set_int(obj, "strap_mode", ESP32S3_STRAP_MODE_FLASH_BOOT, &error_fatal);
++    object_property_set_int(obj, "pin-count", 49, &error_fatal);
++    object_property_set_bool(obj, "s3-mode", true, &error_fatal);
+ }
+
+ /* If we need to override any function from the parent (reset, realize, ...), it shall be done
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+index b351a64f9ff75764383345ef8529726a4013fe97..5367df9a10ede204cae61b548de7c0bd27196fd2 100644
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -651,6 +651,8 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+ {
+     DeviceState *i2c_master;
+     I2CBus *i2c_bus;
++    I2CSlave *keyboard;
++    qemu_irq keyboard_irq;
+
+     if (strcmp(ms->board_profile, "cardputer-adv")) {
+         return;
+@@ -658,7 +660,10 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+
+     i2c_master = DEVICE(&soc->i2c[0]);
+     i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
+-    i2c_slave_create_simple(i2c_bus, TYPE_TCA8418, 0x34);
++    keyboard = i2c_slave_create_simple(i2c_bus, TYPE_TCA8418, 0x34);
++    keyboard_irq = qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 11);
++    qdev_connect_gpio_out_named(DEVICE(keyboard), "nINT", 0, keyboard_irq);
++    qemu_set_irq(keyboard_irq, 1);
+ }
+
+ static void esp32s3_machine_init(MachineState *machine)
+@@ -695,7 +700,6 @@ static void esp32s3_machine_init(MachineState *machine)
+     // qdev_prop_set_chr(DEVICE(ss), "serial2", serial_hd(2));
+
+     qdev_realize(DEVICE(ss), NULL, &error_fatal);
+-    esp32s3_machine_init_board_devices(ms, ss);
+
+     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
+     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
+@@ -835,6 +839,9 @@ static void esp32s3_machine_init(MachineState *machine)
+         sysbus_realize(SYS_BUS_DEVICE(&ss->gpio), &error_fatal);
+         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpio), 0);
+         memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);
++        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->gpio), 0,
++                           qdev_get_gpio_in(intmatrix_dev, ETS_GPIO_INTR_SOURCE));
++        esp32s3_machine_init_board_devices(ms, ss);
+     }
+
+     {
+diff --git a/include/hw/gpio/esp32_gpio.h b/include/hw/gpio/esp32_gpio.h
+index 163b41aa6b5aeb9f00e017a3fc78507e191799a6..c2254a5a163f68472b48eacb2a57dd6440db506f 100644
+--- a/include/hw/gpio/esp32_gpio.h
++++ b/include/hw/gpio/esp32_gpio.h
+@@ -13,13 +13,22 @@ REG32(GPIO_STRAP, 0x0038)
+
+ #define ESP32_STRAP_MODE_FLASH_BOOT 0x12
+ #define ESP32_STRAP_MODE_UART_BOOT  0x0f
++#define ESP32_GPIO_MAX_PINS 64
+
+ typedef struct Esp32GpioState {
+     SysBusDevice parent_obj;
+
+     MemoryRegion iomem;
+     qemu_irq irq;
++    qemu_irq pin_out[ESP32_GPIO_MAX_PINS];
+     uint32_t strap_mode;
++    uint32_t pin_count;
++    bool s3_mode;
++    uint64_t input_level;
++    uint64_t output_level;
++    uint64_t output_enable;
++    uint64_t interrupt_status;
++    uint32_t pin_config[ESP32_GPIO_MAX_PINS];
+ } Esp32GpioState;
+
+ typedef struct Esp32GpioClass {

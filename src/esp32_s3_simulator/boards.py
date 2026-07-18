@@ -64,7 +64,7 @@ CARDPUTER_ADV = BoardProfile(
             "keyboard",
             "TCA8418 keyboard",
             Fidelity.EMULATED,
-            "I2C FIFO model with typed key injection",
+            "I2C FIFO, GPIO 11 interrupt, and typed key injection",
         ),
         Capability("power", "Battery and power states", Fidelity.PLANNED, "Behavioral model"),
         Capability("wifi", "Wi-Fi RF", Fidelity.UNSUPPORTED, "No physical RF simulation"),

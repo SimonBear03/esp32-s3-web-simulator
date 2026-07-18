@@ -12,20 +12,22 @@ fixtures will build on its stable `SIM:` UART contract.
 
 The 2026-07-19 keyboard-capable base build produced unpadded merged-image
 SHA-256
-`0c484b8d77d6b8c4782fa23177d29bf94fb074d570f1bfbacdf9950533254913`.
+`6d3f125e32121aee76a601f12062381f8b32de0e11b41fa8e7c47c8465757dfb`.
 The service conformance runner observed TCA8418 configuration at I2C address
-`0x34`, three heartbeats, `SIM:PONG`, a software reset, a second boot, NVS
-incrementing from 1 to 2, continued heartbeats, and runtime-directory cleanup.
+`0x34`, ESP-IDF `CHANGE` interrupt registration on GPIO 11, three heartbeats,
+`SIM:PONG`, a software reset, a second boot, NVS incrementing from 1 to 2,
+continued heartbeats, and runtime-directory cleanup.
 The Codex sandbox required the runner's Unix-socket QMP path to be disabled;
 production conformance keeps QMP mandatory.
 
 The same pinned worker and owned firmware were therefore exercised with QMP on
 stdio and UART in a separate private file. QMP accepted `input-send-event` for
 an `A` key down/up pair. Firmware polling the emulated TCA8418 FIFO observed
-`SIM:KEY raw=0x8d` followed by `SIM:KEY raw=0x0d`, which proves the host event,
-QMP, board mapping, I2C controller, device register, and firmware-read path end
-to end. The service runner performs these same assertions automatically when
-its normal private QMP socket is available.
+`SIM:KEY raw=0x8d` followed by `SIM:KEY raw=0x0d` with firmware polling removed.
+This proves the host event, QMP, board mapping, TCA8418 nINT, GPIO 11 edge,
+ESP-IDF ISR, I2C controller, device register, and firmware-read path end to end.
+The service runner performs these same assertions automatically when its normal
+private QMP socket is available.
 
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.

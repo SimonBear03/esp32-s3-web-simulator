@@ -62,6 +62,7 @@ async def run(args: argparse.Namespace) -> None:
         try:
             session = await manager.create(CARDPUTER_ADV, args.firmware.read_bytes())
             await wait_for_text(session, "SIM:TCA8418 address=0x34 cfg=0x01")
+            await wait_for_text(session, "SIM:TCA8418_IRQ pin=11 mode=change")
             await wait_for_text(session, "SIM:READY")
             await wait_for_text(session, "SIM:HEARTBEAT", count=3)
 

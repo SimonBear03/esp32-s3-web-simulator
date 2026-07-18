@@ -30,7 +30,8 @@ Successful base conformance requires:
 - `SIM:READY` followed by at least three ordered `SIM:HEARTBEAT` lines;
 - `ping\n` producing `SIM:PONG`;
 - TCA8418 configuration at address `0x34` and QMP-injected `A` press/release
-  producing raw FIFO events `0x8d` and `0x0d`;
+  reaching the firmware through nINT, GPIO 11, the ESP-IDF ISR, and producing
+  raw FIFO events `0x8d` and `0x0d` without polling;
 - `reset\n` producing a new boot sequence without replacing the flash image.
 
 Board-specific display, keyboard/button, PSRAM, power, and sensor fixtures will
