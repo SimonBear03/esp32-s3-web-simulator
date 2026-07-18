@@ -16,7 +16,8 @@ for required_file in \
     THIRD_PARTY.md \
     docs/licensing.md \
     emulator/qemu/version.json \
-    emulator/qemu/patches/0001-m25p80-support-gigadevice-qe-status.patch
+    emulator/qemu/patches/0001-m25p80-support-gigadevice-qe-status.patch \
+    emulator/qemu/patches/0002-esp32s3-i2c-cardputer-tca8418.patch
 do
     if [ ! -s "$required_file" ]; then
         echo "missing required foundation file: $required_file" >&2

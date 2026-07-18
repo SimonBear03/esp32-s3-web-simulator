@@ -29,7 +29,7 @@ def build_qemu_command(
         "-L",
         str(config.rom_directory),
         "-M",
-        "esp32s3",
+        f"esp32s3,board-profile={board.id}",
         "-nographic",
         "-nic",
         "none",

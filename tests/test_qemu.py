@@ -19,7 +19,13 @@ def command_for(board_id: str) -> tuple[str, ...]:
 def test_worker_command_disables_network_and_exposes_qmp_and_serial() -> None:
     command = command_for("cardputer-adv")
 
-    assert command[:5] == ("/opt/qemu", "-L", "/opt/roms", "-M", "esp32s3")
+    assert command[:5] == (
+        "/opt/qemu",
+        "-L",
+        "/opt/roms",
+        "-M",
+        "esp32s3,board-profile=cardputer-adv",
+    )
     assert command[command.index("-nic") + 1] == "none"
     assert command[command.index("-serial") + 1] == "stdio"
     assert command[command.index("-monitor") + 1] == "none"
@@ -30,6 +36,7 @@ def test_worker_command_disables_network_and_exposes_qmp_and_serial() -> None:
 
 def test_sticks3_worker_enables_eight_mebibytes_of_psram() -> None:
     command = command_for("sticks3")
+    assert command[command.index("-M") + 1] == "esp32s3,board-profile=sticks3"
     assert command[command.index("-m") + 1] == "8M"
 
 

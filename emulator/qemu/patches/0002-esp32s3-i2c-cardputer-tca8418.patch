@@ -1,0 +1,677 @@
+diff --git a/hw/i2c/esp32_i2c.c b/hw/i2c/esp32_i2c.c
+index 5f4022f0b124763f4e4cdf33837a01e766fbcb18..50fced7d46892d8fbc1f6e151547a66ed0ea2fb6 100644
+--- a/hw/i2c/esp32_i2c.c
++++ b/hw/i2c/esp32_i2c.c
+@@ -4,6 +4,7 @@
+ #include "qemu/error-report.h"
+ #include "hw/i2c/esp32_i2c.h"
+ #include "hw/irq.h"
++#include "hw/qdev-properties.h"
+
+ static void esp32_i2c_do_transaction(Esp32I2CState * s);
+ static void esp32_i2c_update_irq(Esp32I2CState * s);
+@@ -59,8 +60,11 @@ static uint64_t esp32_i2c_read(void * opaque, hwaddr addr, unsigned int size)
+         return esp32_i2c_get_status_reg(s);
+     case A_I2C_FIFO_DATA: {
+         if (fifo8_num_used(&s->rx_fifo) == 0) {
+-            error_report("esp32_i2c: read I2C FIFO while it is empty");
+-            return 0xee;
++            if (!s->s3_mode) {
++                error_report("esp32_i2c: read I2C FIFO while it is empty");
++                return 0xee;
++            }
++            return 0;
+         }
+         uint8_t res = fifo8_pop(&s->rx_fifo);
+         return res;
+@@ -178,7 +182,32 @@ static void esp32_i2c_do_transaction(Esp32I2CState * s)
+     for (int i_cmd = 0; i_cmd < ESP32_I2C_CMD_COUNT && !stop_or_end; ++i_cmd) {
+         uint32_t cmd = s->cmd_reg[i_cmd];
+         char opcode = FIELD_EX32(cmd, I2C_CMD, OPCODE);
+-        switch (opcode) {
++        char semantic_opcode = opcode;
++
++        /* ESP32-S3 encodes restart/read/stop as 6/3/2 respectively. */
++        if (s->s3_mode) {
++            switch (opcode) {
++            case 6:
++                semantic_opcode = I2C_OPCODE_RSTART;
++                break;
++            case 1:
++                semantic_opcode = I2C_OPCODE_WRITE;
++                break;
++            case 3:
++                semantic_opcode = I2C_OPCODE_READ;
++                break;
++            case 2:
++                semantic_opcode = I2C_OPCODE_STOP;
++                break;
++            case 4:
++                semantic_opcode = I2C_OPCODE_END;
++                break;
++            default:
++                semantic_opcode = -1;
++                break;
++            }
++        }
++        switch (semantic_opcode) {
+             case I2C_OPCODE_RSTART:
+                 i2c_end_transfer(s->bus);
+                 s->trans_ongoing = false;
+@@ -261,10 +290,18 @@ static void esp32_i2c_init(Object * obj)
+     fifo8_create(&s->rx_fifo, ESP32_I2C_FIFO_LENGTH);
+ }
+
++static Property esp32_i2c_properties[] = {
++    DEFINE_PROP_BOOL("s3-mode", Esp32I2CState, s3_mode, false),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
+ static void esp32_i2c_class_init(ObjectClass * klass, void * data)
+ {
++    DeviceClass *dc = DEVICE_CLASS(klass);
+     ResettableClass *rc = RESETTABLE_CLASS(klass);
++
+     rc->phases.hold = esp32_i2c_reset_hold;
++    device_class_set_props(dc, esp32_i2c_properties);
+ }
+
+ static const TypeInfo esp32_i2c_type_info = {
+diff --git a/hw/input/Kconfig b/hw/input/Kconfig
+index a116cb82dff20617811bb6c5bda5a0ec1ab0c8f3..53f0a5a33014cdb9de471a300cb144ab0cf34e3f 100644
+--- a/hw/input/Kconfig
++++ b/hw/input/Kconfig
+@@ -16,6 +16,9 @@ config PS2
+ config STELLARIS_GAMEPAD
+     bool
+
++config TCA8418
++    bool
++
+ config VIRTIO_INPUT
+     bool
+     default y
+diff --git a/hw/input/meson.build b/hw/input/meson.build
+index 90a214962c7c97d33a8297a3fa902aebd6e7b35b..f0b9f3f548c36888f952a4fb003f013d1d9927e3 100644
+--- a/hw/input/meson.build
++++ b/hw/input/meson.build
+@@ -4,6 +4,7 @@ system_ss.add(when: 'CONFIG_PCKBD', if_true: files('pckbd.c'))
+ system_ss.add(when: 'CONFIG_PL050', if_true: files('pl050.c'))
+ system_ss.add(when: 'CONFIG_PS2', if_true: files('ps2.c'))
+ system_ss.add(when: 'CONFIG_STELLARIS_GAMEPAD', if_true: files('stellaris_gamepad.c'))
++system_ss.add(when: 'CONFIG_TCA8418', if_true: files('tca8418.c'))
+
+ system_ss.add(when: 'CONFIG_VIRTIO_INPUT', if_true: files('virtio-input.c'))
+ system_ss.add(when: 'CONFIG_VIRTIO_INPUT', if_true: files('virtio-input-hid.c'))
+diff --git a/hw/input/tca8418.c b/hw/input/tca8418.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd011d223a4a65f0b4706bec0a94cf42f75b4727
+--- /dev/null
++++ b/hw/input/tca8418.c
+@@ -0,0 +1,363 @@
++/*
++ * Texas Instruments TCA8418 keypad scanner
++ *
++ * Copyright (c) 2026 SimonBear03 contributors
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "qemu/osdep.h"
++#include "hw/i2c/i2c.h"
++#include "hw/input/tca8418.h"
++#include "hw/irq.h"
++#include "migration/vmstate.h"
++#include "qemu/module.h"
++#include "ui/console.h"
++
++#define TCA8418_REGISTER_COUNT 0x2f
++#define TCA8418_FIFO_LENGTH 10
++
++#define TCA8418_REG_CFG 0x01
++#define TCA8418_REG_INT_STAT 0x02
++#define TCA8418_REG_KEY_LCK_EC 0x03
++#define TCA8418_REG_KEY_EVENT_A 0x04
++#define TCA8418_REG_KEY_EVENT_J 0x0d
++#define TCA8418_REG_GPIO_DAT_STAT_1 0x14
++#define TCA8418_REG_GPIO_DAT_STAT_2 0x15
++#define TCA8418_REG_GPIO_DAT_STAT_3 0x16
++
++#define TCA8418_CFG_AI 0x80
++#define TCA8418_CFG_OVR_FLOW_M 0x20
++#define TCA8418_CFG_OVR_FLOW_IEN 0x08
++#define TCA8418_CFG_KE_IEN 0x01
++
++#define TCA8418_INT_OVR_FLOW 0x08
++#define TCA8418_INT_KEY_EVENT 0x01
++
++OBJECT_DECLARE_SIMPLE_TYPE(TCA8418State, TCA8418)
++
++struct TCA8418State {
++    I2CSlave parent_obj;
++
++    uint8_t registers[TCA8418_REGISTER_COUNT];
++    uint8_t pointer;
++    bool expect_pointer;
++
++    uint8_t fifo[TCA8418_FIFO_LENGTH];
++    uint8_t fifo_head;
++    uint8_t fifo_count;
++    bool pressed[81];
++
++    qemu_irq irq;
++    QemuInputHandlerState *input_handler;
++};
++
++static void tca8418_update_irq(TCA8418State *s)
++{
++    uint8_t config = s->registers[TCA8418_REG_CFG];
++    uint8_t status = s->registers[TCA8418_REG_INT_STAT];
++    bool asserted = ((status & TCA8418_INT_KEY_EVENT) &&
++                     (config & TCA8418_CFG_KE_IEN)) ||
++                    ((status & TCA8418_INT_OVR_FLOW) &&
++                     (config & TCA8418_CFG_OVR_FLOW_IEN));
++
++    /* The hardware interrupt output is active-low and open-drain. */
++    qemu_set_irq(s->irq, !asserted);
++}
++
++static uint8_t tca8418_key_event_register(TCA8418State *s, unsigned int index)
++{
++    if (index >= s->fifo_count) {
++        return 0;
++    }
++    return s->fifo[(s->fifo_head + index) % TCA8418_FIFO_LENGTH];
++}
++
++static uint8_t tca8418_pop_event(TCA8418State *s)
++{
++    uint8_t event;
++
++    if (s->fifo_count == 0) {
++        return 0;
++    }
++
++    event = s->fifo[s->fifo_head];
++    s->fifo_head = (s->fifo_head + 1) % TCA8418_FIFO_LENGTH;
++    s->fifo_count--;
++    if (s->fifo_count == 0) {
++        s->registers[TCA8418_REG_INT_STAT] &= ~TCA8418_INT_KEY_EVENT;
++    }
++    tca8418_update_irq(s);
++    return event;
++}
++
++static void tca8418_push_event(TCA8418State *s, uint8_t event)
++{
++    unsigned int tail;
++
++    if (s->fifo_count == TCA8418_FIFO_LENGTH) {
++        s->registers[TCA8418_REG_INT_STAT] |= TCA8418_INT_OVR_FLOW;
++        if (!(s->registers[TCA8418_REG_CFG] & TCA8418_CFG_OVR_FLOW_M)) {
++            tca8418_update_irq(s);
++            return;
++        }
++        s->fifo_head = (s->fifo_head + 1) % TCA8418_FIFO_LENGTH;
++        s->fifo_count--;
++    }
++
++    tail = (s->fifo_head + s->fifo_count) % TCA8418_FIFO_LENGTH;
++    s->fifo[tail] = event;
++    s->fifo_count++;
++    s->registers[TCA8418_REG_INT_STAT] |= TCA8418_INT_KEY_EVENT;
++    tca8418_update_irq(s);
++}
++
++static bool tca8418_qcode_to_position(QKeyCode qcode, uint8_t *x, uint8_t *y)
++{
++    static const int8_t positions[Q_KEY_CODE__MAX][2] = {
++        [Q_KEY_CODE_GRAVE_ACCENT] = { 0, 0 },
++        [Q_KEY_CODE_1] = { 1, 0 }, [Q_KEY_CODE_2] = { 2, 0 },
++        [Q_KEY_CODE_3] = { 3, 0 }, [Q_KEY_CODE_4] = { 4, 0 },
++        [Q_KEY_CODE_5] = { 5, 0 }, [Q_KEY_CODE_6] = { 6, 0 },
++        [Q_KEY_CODE_7] = { 7, 0 }, [Q_KEY_CODE_8] = { 8, 0 },
++        [Q_KEY_CODE_9] = { 9, 0 }, [Q_KEY_CODE_0] = { 10, 0 },
++        [Q_KEY_CODE_MINUS] = { 11, 0 }, [Q_KEY_CODE_EQUAL] = { 12, 0 },
++        [Q_KEY_CODE_BACKSPACE] = { 13, 0 },
++
++        [Q_KEY_CODE_TAB] = { 0, 1 }, [Q_KEY_CODE_Q] = { 1, 1 },
++        [Q_KEY_CODE_W] = { 2, 1 }, [Q_KEY_CODE_E] = { 3, 1 },
++        [Q_KEY_CODE_R] = { 4, 1 }, [Q_KEY_CODE_T] = { 5, 1 },
++        [Q_KEY_CODE_Y] = { 6, 1 }, [Q_KEY_CODE_U] = { 7, 1 },
++        [Q_KEY_CODE_I] = { 8, 1 }, [Q_KEY_CODE_O] = { 9, 1 },
++        [Q_KEY_CODE_P] = { 10, 1 }, [Q_KEY_CODE_BRACKET_LEFT] = { 11, 1 },
++        [Q_KEY_CODE_BRACKET_RIGHT] = { 12, 1 },
++        [Q_KEY_CODE_BACKSLASH] = { 13, 1 },
++
++        [Q_KEY_CODE_META_L] = { 0, 2 },
++        [Q_KEY_CODE_SHIFT] = { 1, 2 }, [Q_KEY_CODE_SHIFT_R] = { 1, 2 },
++        [Q_KEY_CODE_A] = { 2, 2 }, [Q_KEY_CODE_S] = { 3, 2 },
++        [Q_KEY_CODE_D] = { 4, 2 }, [Q_KEY_CODE_F] = { 5, 2 },
++        [Q_KEY_CODE_G] = { 6, 2 }, [Q_KEY_CODE_H] = { 7, 2 },
++        [Q_KEY_CODE_J] = { 8, 2 }, [Q_KEY_CODE_K] = { 9, 2 },
++        [Q_KEY_CODE_L] = { 10, 2 }, [Q_KEY_CODE_SEMICOLON] = { 11, 2 },
++        [Q_KEY_CODE_APOSTROPHE] = { 12, 2 }, [Q_KEY_CODE_RET] = { 13, 2 },
++
++        [Q_KEY_CODE_CTRL] = { 0, 3 }, [Q_KEY_CODE_CTRL_R] = { 0, 3 },
++        [Q_KEY_CODE_META_R] = { 1, 3 }, [Q_KEY_CODE_MENU] = { 1, 3 },
++        [Q_KEY_CODE_ALT] = { 2, 3 }, [Q_KEY_CODE_ALT_R] = { 2, 3 },
++        [Q_KEY_CODE_Z] = { 3, 3 }, [Q_KEY_CODE_X] = { 4, 3 },
++        [Q_KEY_CODE_C] = { 5, 3 }, [Q_KEY_CODE_V] = { 6, 3 },
++        [Q_KEY_CODE_B] = { 7, 3 }, [Q_KEY_CODE_N] = { 8, 3 },
++        [Q_KEY_CODE_M] = { 9, 3 }, [Q_KEY_CODE_COMMA] = { 10, 3 },
++        [Q_KEY_CODE_DOT] = { 11, 3 }, [Q_KEY_CODE_SLASH] = { 12, 3 },
++        [Q_KEY_CODE_SPC] = { 13, 3 },
++    };
++
++    if (qcode < 0 || qcode >= Q_KEY_CODE__MAX ||
++        (positions[qcode][0] == 0 && positions[qcode][1] == 0 &&
++         qcode != Q_KEY_CODE_GRAVE_ACCENT)) {
++        return false;
++    }
++
++    *x = positions[qcode][0];
++    *y = positions[qcode][1];
++    return true;
++}
++
++static uint8_t tca8418_position_to_event(uint8_t x, uint8_t y)
++{
++    uint8_t raw_row = x / 2;
++    uint8_t raw_column = y + ((x & 1) ? 4 : 0);
++
++    return raw_row * 10 + raw_column + 1;
++}
++
++static void tca8418_input_event(DeviceState *dev, QemuConsole *src,
++                                InputEvent *evt)
++{
++    TCA8418State *s = TCA8418(dev);
++    InputKeyEvent *key = evt->u.key.data;
++    QKeyCode qcode = qemu_input_key_value_to_qcode(key->key);
++    uint8_t x, y, code;
++
++    if (!tca8418_qcode_to_position(qcode, &x, &y)) {
++        return;
++    }
++
++    code = tca8418_position_to_event(x, y);
++    if (s->pressed[code] == key->down) {
++        return;
++    }
++
++    s->pressed[code] = key->down;
++    tca8418_push_event(s, code | (key->down ? 0x80 : 0));
++}
++
++static const QemuInputHandler tca8418_input_handler = {
++    .name = "TCA8418 keypad",
++    .mask = INPUT_EVENT_MASK_KEY,
++    .event = tca8418_input_event,
++};
++
++static uint8_t tca8418_read_register(TCA8418State *s, uint8_t reg)
++{
++    if (reg == TCA8418_REG_KEY_LCK_EC) {
++        return (s->registers[reg] & 0xf0) | s->fifo_count;
++    }
++    if (reg == TCA8418_REG_KEY_EVENT_A) {
++        return tca8418_pop_event(s);
++    }
++    if (reg > TCA8418_REG_KEY_EVENT_A && reg <= TCA8418_REG_KEY_EVENT_J) {
++        return tca8418_key_event_register(s, reg - TCA8418_REG_KEY_EVENT_A);
++    }
++    if (reg >= TCA8418_REGISTER_COUNT) {
++        return 0;
++    }
++    return s->registers[reg];
++}
++
++static void tca8418_write_register(TCA8418State *s, uint8_t reg, uint8_t value)
++{
++    if (reg >= TCA8418_REGISTER_COUNT) {
++        return;
++    }
++
++    switch (reg) {
++    case TCA8418_REG_CFG:
++        s->registers[reg] = value;
++        tca8418_update_irq(s);
++        break;
++    case TCA8418_REG_INT_STAT:
++        s->registers[reg] &= ~value;
++        if (s->fifo_count) {
++            s->registers[reg] |= TCA8418_INT_KEY_EVENT;
++        }
++        tca8418_update_irq(s);
++        break;
++    case TCA8418_REG_KEY_LCK_EC:
++        s->registers[reg] = value & 0xf0;
++        break;
++    case TCA8418_REG_KEY_EVENT_A ... TCA8418_REG_KEY_EVENT_J:
++        break;
++    default:
++        s->registers[reg] = value;
++        break;
++    }
++}
++
++static int tca8418_event(I2CSlave *i2c, enum i2c_event event)
++{
++    TCA8418State *s = TCA8418(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->expect_pointer = true;
++    }
++    return 0;
++}
++
++static int tca8418_send(I2CSlave *i2c, uint8_t data)
++{
++    TCA8418State *s = TCA8418(i2c);
++
++    if (s->expect_pointer) {
++        s->pointer = data;
++        s->expect_pointer = false;
++    } else {
++        tca8418_write_register(s, s->pointer, data);
++        if (s->registers[TCA8418_REG_CFG] & TCA8418_CFG_AI) {
++            s->pointer++;
++        }
++    }
++    return 0;
++}
++
++static uint8_t tca8418_recv(I2CSlave *i2c)
++{
++    TCA8418State *s = TCA8418(i2c);
++    uint8_t value = tca8418_read_register(s, s->pointer);
++
++    if (s->registers[TCA8418_REG_CFG] & TCA8418_CFG_AI) {
++        s->pointer++;
++    }
++    return value;
++}
++
++static void tca8418_reset(DeviceState *dev)
++{
++    TCA8418State *s = TCA8418(dev);
++
++    memset(s->registers, 0, sizeof(s->registers));
++    s->registers[TCA8418_REG_GPIO_DAT_STAT_1] = 0xff;
++    s->registers[TCA8418_REG_GPIO_DAT_STAT_2] = 0xff;
++    s->registers[TCA8418_REG_GPIO_DAT_STAT_3] = 0x03;
++    s->pointer = 0;
++    s->expect_pointer = false;
++    s->fifo_head = 0;
++    s->fifo_count = 0;
++    memset(s->fifo, 0, sizeof(s->fifo));
++    memset(s->pressed, 0, sizeof(s->pressed));
++    tca8418_update_irq(s);
++}
++
++static void tca8418_realize(DeviceState *dev, Error **errp)
++{
++    TCA8418State *s = TCA8418(dev);
++
++    qdev_init_gpio_out_named(dev, &s->irq, "nINT", 1);
++    s->input_handler = qemu_input_handler_register(dev, &tca8418_input_handler);
++}
++
++static void tca8418_unrealize(DeviceState *dev)
++{
++    TCA8418State *s = TCA8418(dev);
++
++    if (s->input_handler) {
++        qemu_input_handler_unregister(s->input_handler);
++        s->input_handler = NULL;
++    }
++}
++
++static const VMStateDescription vmstate_tca8418 = {
++    .name = TYPE_TCA8418,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, TCA8418State),
++        VMSTATE_UINT8_ARRAY(registers, TCA8418State, TCA8418_REGISTER_COUNT),
++        VMSTATE_UINT8(pointer, TCA8418State),
++        VMSTATE_BOOL(expect_pointer, TCA8418State),
++        VMSTATE_UINT8_ARRAY(fifo, TCA8418State, TCA8418_FIFO_LENGTH),
++        VMSTATE_UINT8(fifo_head, TCA8418State),
++        VMSTATE_UINT8(fifo_count, TCA8418State),
++        VMSTATE_BOOL_ARRAY(pressed, TCA8418State, 81),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void tca8418_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *sc = I2C_SLAVE_CLASS(klass);
++
++    dc->realize = tca8418_realize;
++    dc->unrealize = tca8418_unrealize;
++    device_class_set_legacy_reset(dc, tca8418_reset);
++    dc->vmsd = &vmstate_tca8418;
++    sc->event = tca8418_event;
++    sc->recv = tca8418_recv;
++    sc->send = tca8418_send;
++}
++
++static const TypeInfo tca8418_info = {
++    .name = TYPE_TCA8418,
++    .parent = TYPE_I2C_SLAVE,
++    .instance_size = sizeof(TCA8418State),
++    .class_init = tca8418_class_init,
++};
++
++static void tca8418_register_types(void)
++{
++    type_register_static(&tca8418_info);
++}
++
++type_init(tca8418_register_types)
+diff --git a/hw/xtensa/Kconfig b/hw/xtensa/Kconfig
+index 5866207480a2a2732a2d2eed6360fa9815f2a795..9fcdeaa70baef4886d8315deb55dc78d69291995 100644
+--- a/hw/xtensa/Kconfig
++++ b/hw/xtensa/Kconfig
+@@ -44,5 +44,5 @@ config XTENSA_ESP32S3
+     select DWC_SDMMC
+     select TMP105
+     select ESP_RGB
+-
++    select TCA8418
+
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+index 4a24a040fa142b773442c5c3f5c9b173e3f409fb..b351a64f9ff75764383345ef8529726a4013fe97 100644
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -61,6 +61,8 @@
+ #include "hw/timer/esp32s3_timg.h"
+ #include "hw/timer/esp32s3_systimer.h"
+ #include "hw/gpio/esp32s3_gpio.h"
++#include "hw/i2c/esp32_i2c.h"
++#include "hw/input/tca8418.h"
+ #include "hw/misc/esp32s3_xts_aes.h"
+ #include "hw/misc/esp32s3_pms.h"
+ #include "hw/net/can/esp32s3_twai.h"
+@@ -122,6 +124,7 @@ typedef struct Esp32s3SocState {
+     XtensaCPU cpu[ESP32S3_CPU_COUNT];
+     Esp32s3IntMatrixState intmatrix;
+     ESP32S3UARTState uart[ESP32S3_UART_COUNT];
++    Esp32I2CState i2c[ESP32S3_I2C_COUNT];
+     ESP32S3GPIOState gpio;
+     Esp32s3RngState rng;
+     Esp32S3TWAIState twai;
+@@ -211,6 +214,9 @@ static void esp32s3_soc_reset(DeviceState *dev)
+         for (int i = 0; i < ESP32S3_UART_COUNT; ++i) {
+             device_cold_reset(DEVICE(&s->uart[i]));
+         }
++        for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
++            device_cold_reset(DEVICE(&s->i2c[i]));
++        }
+     }
+     if (s->requested_reset & ESP32S3_SOC_RESET_PROCPU) {
+         xtensa_select_static_vectors(&s->cpu[0].env, s->rtc_cntl.stat_vector_sel[0]);
+@@ -318,6 +324,7 @@ struct Esp32s3MachineState {
+
+     Esp32s3SocState esp32s3;
+     DeviceState *flash_dev;
++    char *board_profile;
+ };
+ #define TYPE_ESP32S3_MACHINE MACHINE_TYPE_NAME("esp32s3")
+
+@@ -425,6 +432,17 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
+                            qdev_get_gpio_in(intmatrix_dev, ETS_UART0_INTR_SOURCE + i));
+     }
+
++    for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
++        const hwaddr i2c_base[] = {
++            DR_REG_I2C_EXT_BASE, DR_REG_I2C1_EXT_BASE
++        };
++        qdev_realize(DEVICE(&s->i2c[i]), &s->periph_bus, &error_fatal);
++        esp32s3_soc_add_periph_device(sys_mem, &s->i2c[i], i2c_base[i]);
++        sysbus_connect_irq(SYS_BUS_DEVICE(&s->i2c[i]), 0,
++                           qdev_get_gpio_in(intmatrix_dev,
++                                            ETS_I2C_EXT0_INTR_SOURCE + i));
++    }
++
+     qdev_realize(DEVICE(&s->sdmmc), &s->periph_bus, &error_fatal);
+     esp32s3_soc_add_periph_device(sys_mem, &s->sdmmc, DR_REG_SDMMC_BASE);
+     sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdmmc), 0,
+@@ -532,6 +550,12 @@ static void esp32s3_soc_init(Object *obj)
+         object_initialize_child(obj, name, &s->uart[i], TYPE_ESP32S3_UART);
+     }
+
++    for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
++        snprintf(name, sizeof(name), "i2c%d", i);
++        object_initialize_child(obj, name, &s->i2c[i], TYPE_ESP32_I2C);
++        qdev_prop_set_bit(DEVICE(&s->i2c[i]), "s3-mode", true);
++    }
++
+     object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev");
+     object_property_add_alias(obj, "serial1", OBJECT(&s->uart[1]), "chardev");
+     // object_property_add_alias(obj, "serial2", OBJECT(&s->uart[2]), "chardev");
+@@ -590,6 +614,28 @@ static uint64_t translate_phys_addr(void *opaque, uint64_t addr)
+
+ OBJECT_DECLARE_SIMPLE_TYPE(Esp32s3MachineState, ESP32S3_MACHINE)
+
++static char *esp32s3_machine_get_board_profile(Object *obj, Error **errp)
++{
++    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
++
++    return g_strdup(ms->board_profile);
++}
++
++static void esp32s3_machine_set_board_profile(Object *obj, const char *value,
++                                               Error **errp)
++{
++    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
++
++    if (strcmp(value, "none") && strcmp(value, "cardputer-adv") &&
++        strcmp(value, "sticks3")) {
++        error_setg(errp, "unknown ESP32-S3 board profile '%s'", value);
++        return;
++    }
++
++    g_free(ms->board_profile);
++    ms->board_profile = g_strdup(value);
++}
++
+ // -----------------------------------------------
+
+ static void esp32s3_soc_add_unimp_device(MemoryRegion *dest, const char* name, hwaddr dport_base_addr, size_t size)
+@@ -600,6 +646,21 @@ static void esp32s3_soc_add_unimp_device(MemoryRegion *dest, const char* name, h
+     g_free(name_apb);
+ }
+
++static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
++                                                Esp32s3SocState *soc)
++{
++    DeviceState *i2c_master;
++    I2CBus *i2c_bus;
++
++    if (strcmp(ms->board_profile, "cardputer-adv")) {
++        return;
++    }
++
++    i2c_master = DEVICE(&soc->i2c[0]);
++    i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
++    i2c_slave_create_simple(i2c_bus, TYPE_TCA8418, 0x34);
++}
++
+ static void esp32s3_machine_init(MachineState *machine)
+ {
+     DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
+@@ -634,6 +695,7 @@ static void esp32s3_machine_init(MachineState *machine)
+     // qdev_prop_set_chr(DEVICE(ss), "serial2", serial_hd(2));
+
+     qdev_realize(DEVICE(ss), NULL, &error_fatal);
++    esp32s3_machine_init_board_devices(ms, ss);
+
+     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
+     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
+@@ -986,10 +1048,31 @@ static void esp32s3_machine_class_init(ObjectClass *oc, void *data)
+     mc->fixup_ram_size = esp32s3_fixup_ram_size;
+ }
+
++static void esp32s3_machine_instance_init(Object *obj)
++{
++    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
++
++    ms->board_profile = g_strdup("none");
++    object_property_add_str(obj, "board-profile",
++                            esp32s3_machine_get_board_profile,
++                            esp32s3_machine_set_board_profile);
++    object_property_set_description(obj, "board-profile",
++                                    "Attached device profile: none, cardputer-adv, or sticks3");
++}
++
++static void esp32s3_machine_instance_finalize(Object *obj)
++{
++    Esp32s3MachineState *ms = ESP32S3_MACHINE(obj);
++
++    g_free(ms->board_profile);
++}
++
+ static const TypeInfo esp32s3_info = {
+     .name = TYPE_ESP32S3_MACHINE,
+     .parent = TYPE_MACHINE,
+     .instance_size = sizeof(Esp32s3MachineState),
++    .instance_init = esp32s3_machine_instance_init,
++    .instance_finalize = esp32s3_machine_instance_finalize,
+     .class_init = esp32s3_machine_class_init,
+ };
+
+@@ -999,4 +1082,3 @@ static void esp32s3_machine_type_init(void)
+ }
+
+ type_init(esp32s3_machine_type_init);
+-
+diff --git a/include/hw/i2c/esp32_i2c.h b/include/hw/i2c/esp32_i2c.h
+index b17dc75c8de4ddf91f48566c67d12a477bc2816b..1844b4bb9ca43588d8246521de3197caf619ce3b 100644
+--- a/include/hw/i2c/esp32_i2c.h
++++ b/include/hw/i2c/esp32_i2c.h
+@@ -24,6 +24,7 @@ typedef struct Esp32I2CState {
+     Fifo8 rx_fifo;
+     Fifo8 tx_fifo;
+     bool trans_ongoing;
++    bool s3_mode;
+
+     uint32_t ctr_reg;
+     uint32_t timeout_reg;
+diff --git a/include/hw/input/tca8418.h b/include/hw/input/tca8418.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..168636c5659b039b4087bf4f3c3e9cf86cedd96b
+--- /dev/null
++++ b/include/hw/input/tca8418.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#ifndef HW_INPUT_TCA8418_H
++#define HW_INPUT_TCA8418_H
++
++#define TYPE_TCA8418 "tca8418"
++
++#endif

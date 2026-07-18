@@ -4,7 +4,7 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from esp32_s3_simulator.api import create_app
+from esp32_s3_simulator.api import KeyInputMessage, create_app
 from esp32_s3_simulator.settings import Settings
 
 
@@ -34,6 +34,13 @@ async def test_health_and_board_contract(tmp_path: Path) -> None:
         boards = (await client.get("/v1/boards")).json()
         assert [board["id"] for board in boards] == ["cardputer-adv", "sticks3"]
         assert boards[0]["capabilities"][3]["fidelity"] == "planned"
+        assert boards[0]["capabilities"][4]["fidelity"] == "emulated"
+
+
+def test_input_message_contract_rejects_untyped_payloads() -> None:
+    assert KeyInputMessage.model_validate(
+        {"type": "key", "key": "a", "pressed": True, "sequence": 12}
+    ).sequence == 12
 
 
 async def test_session_creation_fails_closed_without_worker(tmp_path: Path) -> None:

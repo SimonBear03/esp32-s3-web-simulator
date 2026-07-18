@@ -46,9 +46,30 @@ The server replays a bounded recent-output buffer when a debugger connects.
 UART is a byte stream: clients must not assume each WebSocket message is a full
 line.
 
+## Board input
+
+`WS /v1/sessions/{id}/input` accepts typed JSON events. The first implemented
+event is a Cardputer ADV key transition:
+
+```json
+{"type":"key","key":"a","pressed":true,"sequence":17}
+```
+
+The service responds with `{"type":"ack","sequence":17}` only after QMP
+accepts the event. Invalid, unsupported, or unavailable inputs produce a typed
+`error` response. Valid key identifiers are the four physical keyboard rows:
+
+- `grave`, `0` through `9`, `minus`, `equals`, `backspace`;
+- `tab`, `q` through `p`, `bracket-left`, `bracket-right`, `backslash`;
+- `fn`, `shift`, `a` through `l`, `semicolon`, `apostrophe`, `enter`;
+- `ctrl`, `opt`, `alt`, `z` through `m`, `comma`, `period`, `slash`, `space`.
+
+These are board-level identifiers. QEMU key names and the Cardputer matrix
+encoding are private worker details.
+
 ## Pending protocol surfaces
 
-Framebuffer updates, board input, power events, QMP-backed pause/reset,
+Framebuffer updates, StickS3 button input, power events, QMP-backed pause/reset,
 breakpoints, memory inspection, and deterministic traces will use distinct
 typed WebSocket messages. They are not represented as fake-success endpoints
 until their worker implementations exist.

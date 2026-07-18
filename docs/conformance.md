@@ -10,12 +10,22 @@ and build recipe will be pinned; generated binaries will remain untracked.
 The base fixture lives at `tests/firmware/conformance/`. Board-specific
 fixtures will build on its stable `SIM:` UART contract.
 
-The 2026-07-19 base build produced unpadded merged-image SHA-256
-`df7d5e4723023de09ed261884ee393c02c08789ac6d7d97d6838ce7e726d7048`.
-The service conformance runner observed three heartbeats, `SIM:PONG`, a software
-reset, a second boot, NVS incrementing from 1 to 2, continued heartbeats, and
-runtime-directory cleanup. QMP was disabled only because the Codex sandbox
-denies Unix-domain sockets; production conformance still requires it.
+The 2026-07-19 keyboard-capable base build produced unpadded merged-image
+SHA-256
+`0c484b8d77d6b8c4782fa23177d29bf94fb074d570f1bfbacdf9950533254913`.
+The service conformance runner observed TCA8418 configuration at I2C address
+`0x34`, three heartbeats, `SIM:PONG`, a software reset, a second boot, NVS
+incrementing from 1 to 2, continued heartbeats, and runtime-directory cleanup.
+The Codex sandbox required the runner's Unix-socket QMP path to be disabled;
+production conformance keeps QMP mandatory.
+
+The same pinned worker and owned firmware were therefore exercised with QMP on
+stdio and UART in a separate private file. QMP accepted `input-send-event` for
+an `A` key down/up pair. Firmware polling the emulated TCA8418 FIFO observed
+`SIM:KEY raw=0x8d` followed by `SIM:KEY raw=0x0d`, which proves the host event,
+QMP, board mapping, I2C controller, device register, and firmware-read path end
+to end. The service runner performs these same assertions automatically when
+its normal private QMP socket is available.
 
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.
@@ -47,8 +57,9 @@ last application-owned line was:
 
 QEMU then exited only because the test harness sent its timeout signal. This
 proves the GigaDevice QE patch fixes the flash-initialization blocker. It does
-not prove Cardputer ADV keyboard or display compatibility; those require the
-simulator-owned fixture and explicit peripheral models.
+not prove Cardputer ADV display compatibility. Keyboard compatibility is now
+covered independently by the simulator-owned fixture and explicit I2C/TCA8418
+models rather than inferred from the application snapshot.
 
 The same snapshot was then run for four seconds through the public service's
 `SessionManager`, with guest networking disabled and native worker resource
@@ -68,3 +79,14 @@ default and must be live-tested in the deployment boundary.
 - Keep hardware-in-the-loop results separate from emulator-only results.
 - A timeout is successful only when the expected heartbeat remains observable
   and no panic, reset loop, sanitizer report, or host crash occurred.
+
+## Design references
+
+- [M5Stack Cardputer ADV documentation](https://docs.m5stack.com/en/core/Cardputer-Adv)
+  defines the ESP32-S3, display, I2C, TCA8418, and interrupt pin assignment.
+- [Texas Instruments TCA8418 datasheet](https://www.ti.com/lit/ds/symlink/tca8418.pdf)
+  defines the `0x34` address, 10-event FIFO, register map, and press bit.
+- [Espressif QEMU supported-feature matrix](https://github.com/espressif/esp-toolchain-docs/blob/main/qemu/README.md#supported-features)
+  is the upstream baseline; this repository documents every additional patch.
+- [ESP-IDF ESP32-S3 I2C API](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/peripherals/i2c.html)
+  anchors the firmware-facing controller behavior.

@@ -61,8 +61,15 @@ async def run(args: argparse.Namespace) -> None:
         await manager.start()
         try:
             session = await manager.create(CARDPUTER_ADV, args.firmware.read_bytes())
+            await wait_for_text(session, "SIM:TCA8418 address=0x34 cfg=0x01")
             await wait_for_text(session, "SIM:READY")
             await wait_for_text(session, "SIM:HEARTBEAT", count=3)
+
+            if args.qmp:
+                await manager.send_key(session.id, "a", True)
+                await manager.send_key(session.id, "a", False)
+                await wait_for_text(session, "SIM:KEY raw=0x8d")
+                await wait_for_text(session, "SIM:KEY raw=0x0d")
 
             await manager.write_serial(session.id, b"ping\n")
             await wait_for_text(session, "SIM:PONG")

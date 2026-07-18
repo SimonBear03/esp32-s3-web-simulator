@@ -12,8 +12,11 @@ GigaDevice, causing default-flash initialization to fail before application
 startup.
 
 `patches/0001-m25p80-support-gigadevice-qe-status.patch` adds the equivalent
-GigaDevice behavior. The patch is intentionally narrow and must stay covered by
-a real-firmware boot test.
+GigaDevice behavior. `patches/0002-esp32s3-i2c-cardputer-tca8418.patch`
+maps the ESP32-S3 I2C controllers, adds the S3 command encoding, introduces
+explicit `cardputer-adv` and `sticks3` machine profiles, and attaches an
+original TCA8418 keyboard model to the Cardputer ADV profile. Both patches are
+GPL-2.0-only and covered by real-firmware conformance tests.
 
 ## Build
 
@@ -32,8 +35,12 @@ scripts/build-qemu.sh
 ```
 
 The script clones the immutable commit and its pinned submodules into the
-gitignored `.cache/qemu/` directory, applies the tracked patch, and builds only
+gitignored `.cache/qemu/` directory, applies the tracked patches in order, and builds only
 `qemu-system-xtensa`. It does not download or commit user firmware.
+
+Workers select the board model with `-M esp32s3,board-profile=cardputer-adv`
+or `-M esp32s3,board-profile=sticks3`. The service translates its stable input
+protocol to QMP `input-send-event`; browser clients never need QEMU key codes.
 
 ## ROM and networking policy
 

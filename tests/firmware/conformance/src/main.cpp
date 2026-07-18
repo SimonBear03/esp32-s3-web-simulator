@@ -2,14 +2,75 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <Wire.h>
 
 namespace {
 
 constexpr uint32_t kHeartbeatIntervalMs = 500;
+constexpr uint32_t kKeyboardPollIntervalMs = 50;
 Preferences preferences;
 uint32_t heartbeatSequence = 0;
 uint32_t lastHeartbeatAt = 0;
+uint32_t lastKeyboardPollAt = 0;
 String inputBuffer;
+
+constexpr uint8_t kTca8418Address = 0x34;
+constexpr uint8_t kTca8418ConfigRegister = 0x01;
+constexpr uint8_t kTca8418InterruptStatusRegister = 0x02;
+constexpr uint8_t kTca8418EventCountRegister = 0x03;
+constexpr uint8_t kTca8418EventRegister = 0x04;
+
+bool writeTca8418Register(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(kTca8418Address);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool readTca8418Register(uint8_t reg, uint8_t &value) {
+  Wire.beginTransmission(kTca8418Address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(kTca8418Address, static_cast<uint8_t>(1)) != 1) {
+    return false;
+  }
+  value = Wire.read();
+  return true;
+}
+
+void configureTca8418() {
+  Wire.begin(8, 9, 400000);
+  const bool configured =
+      writeTca8418Register(0x1D, 0x7F) &&
+      writeTca8418Register(0x1E, 0xFF) &&
+      writeTca8418Register(kTca8418ConfigRegister, 0x01);
+
+  uint8_t config = 0;
+  if (!configured || !readTca8418Register(kTca8418ConfigRegister, config)) {
+    Serial.println("SIM:TCA8418 unavailable");
+    return;
+  }
+  Serial.printf("SIM:TCA8418 address=0x%02x cfg=0x%02x\n",
+                kTca8418Address, config);
+}
+
+void readTca8418Events() {
+  uint8_t count = 0;
+  if (!readTca8418Register(kTca8418EventCountRegister, count)) {
+    return;
+  }
+  count &= 0x0F;
+  while (count-- > 0) {
+    uint8_t event = 0;
+    if (!readTca8418Register(kTca8418EventRegister, event)) {
+      return;
+    }
+    Serial.printf("SIM:KEY raw=0x%02x\n", event);
+  }
+  writeTca8418Register(kTca8418InterruptStatusRegister, 0x01);
+}
 
 void printBootContract() {
   preferences.begin("simulator", false);
@@ -66,13 +127,19 @@ void readCommands() {
 void setup() {
   Serial.begin(115200);
   delay(50);
+  configureTca8418();
   printBootContract();
   lastHeartbeatAt = millis();
+  lastKeyboardPollAt = millis();
 }
 
 void loop() {
   readCommands();
   const uint32_t now = millis();
+  if (now - lastKeyboardPollAt >= kKeyboardPollIntervalMs) {
+    lastKeyboardPollAt = now;
+    readTca8418Events();
+  }
   if (now - lastHeartbeatAt >= kHeartbeatIntervalMs) {
     lastHeartbeatAt = now;
     heartbeatSequence += 1;

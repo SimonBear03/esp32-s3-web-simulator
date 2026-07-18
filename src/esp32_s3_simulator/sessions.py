@@ -14,7 +14,9 @@ from uuid import uuid4
 
 from .boards import BoardProfile
 from .firmware import ValidatedFirmware, validate_and_pad_firmware, write_private_flash_image
+from .inputs import qmp_key_event
 from .qemu import QemuWorkerConfig, build_qemu_command
+from .qmp import QmpUnavailableError, execute_qmp
 from .settings import Settings
 
 
@@ -54,6 +56,7 @@ class SessionRecord:
     reader_task: asyncio.Task[None] | None = None
     serial_buffer: deque[bytes] = field(default_factory=lambda: deque(maxlen=256))
     subscribers: set[asyncio.Queue[bytes | None]] = field(default_factory=set)
+    qmp_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -173,6 +176,17 @@ class SessionManager:
             raise RuntimeError("session serial input is not available")
         process.stdin.write(payload)
         await process.stdin.drain()
+
+    async def send_key(self, session_id: str, key: str, pressed: bool) -> None:
+        session = self.get(session_id)
+        if session.state is not SessionState.RUNNING:
+            raise RuntimeError("session board input is not available")
+        if not self._settings.worker_qmp_enabled:
+            raise QmpUnavailableError("QMP board input is disabled for this worker")
+
+        arguments = qmp_key_event(session.board, key, pressed)
+        async with session.qmp_lock:
+            await execute_qmp(session.qmp_socket_path, "input-send-event", arguments)
 
     async def subscribe_serial(self, session_id: str) -> AsyncIterator[bytes]:
         session = self.get(session_id)

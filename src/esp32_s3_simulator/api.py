@@ -3,13 +3,16 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from . import __version__
 from .boards import BOARD_PROFILES, get_board_profile
 from .firmware import FirmwareValidationError
+from .inputs import BoardInputError
+from .qmp import QmpError
 from .sessions import (
     SessionCapacityError,
     SessionManager,
@@ -17,6 +20,15 @@ from .sessions import (
     WorkerUnavailableError,
 )
 from .settings import Settings
+
+
+class KeyInputMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["key"]
+    key: str
+    pressed: bool
+    sequence: int | str | None = None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -111,6 +123,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+        except WebSocketDisconnect:
+            pass
+
+    @app.websocket("/v1/sessions/{session_id}/input")
+    async def session_input(websocket: WebSocket, session_id: str) -> None:
+        try:
+            manager.get(session_id)
+        except SessionNotFoundError:
+            await websocket.close(code=4404, reason="simulation session not found")
+            return
+
+        await websocket.accept()
+        try:
+            while True:
+                payload = await websocket.receive_text()
+                try:
+                    event = KeyInputMessage.model_validate_json(payload)
+                    await manager.send_key(session_id, event.key, event.pressed)
+                    await websocket.send_json({"type": "ack", "sequence": event.sequence})
+                except ValidationError as error:
+                    await websocket.send_json(
+                        {"type": "error", "code": "invalid-event", "detail": str(error)}
+                    )
+                except BoardInputError as error:
+                    await websocket.send_json(
+                        {"type": "error", "code": "unsupported-input", "detail": str(error)}
+                    )
+                except (QmpError, RuntimeError) as error:
+                    await websocket.send_json(
+                        {"type": "error", "code": "worker-unavailable", "detail": str(error)}
+                    )
         except WebSocketDisconnect:
             pass
 

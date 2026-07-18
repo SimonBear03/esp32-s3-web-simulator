@@ -14,7 +14,7 @@ def test_initial_board_profiles_have_explicit_fidelity() -> None:
     assert sticks3.psram_size_mib == 8
     assert all(capability.fidelity in Fidelity for capability in cardputer.capabilities)
     assert any(
-        capability.id == "keyboard" and capability.fidelity is Fidelity.PLANNED
+        capability.id == "keyboard" and capability.fidelity is Fidelity.EMULATED
         for capability in cardputer.capabilities
     )
 

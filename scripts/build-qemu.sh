@@ -10,7 +10,6 @@ PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 WORK_ROOT=${SIMULATOR_QEMU_WORK_ROOT:-"$PROJECT_ROOT/.cache/qemu"}
 SOURCE_DIR="$WORK_ROOT/source"
 BUILD_DIR="$SOURCE_DIR/build"
-PATCH_FILE="$PROJECT_ROOT/emulator/qemu/patches/0001-m25p80-support-gigadevice-qe-status.patch"
 
 for command_name in git python3 ninja pkg-config cc; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -42,12 +41,14 @@ if [ "$ACTUAL_COMMIT" != "$QEMU_COMMIT" ]; then
     exit 1
 fi
 
-if git -C "$SOURCE_DIR" apply --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
-    echo "QEMU compatibility patch is already applied"
-else
-    git -C "$SOURCE_DIR" apply --check "$PATCH_FILE"
-    git -C "$SOURCE_DIR" apply "$PATCH_FILE"
-fi
+for patch_file in "$PROJECT_ROOT"/emulator/qemu/patches/*.patch; do
+    if git -C "$SOURCE_DIR" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+        echo "QEMU patch is already applied: $patch_file"
+    else
+        git -C "$SOURCE_DIR" apply --check "$patch_file"
+        git -C "$SOURCE_DIR" apply "$patch_file"
+    fi
+done
 
 cd "$SOURCE_DIR"
 ./configure \

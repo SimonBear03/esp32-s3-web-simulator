@@ -60,7 +60,12 @@ CARDPUTER_ADV = BoardProfile(
         Capability("flash", "8 MiB SPI flash", Fidelity.EMULATED, "Patched GigaDevice QE path"),
         Capability("serial", "UART console", Fidelity.EMULATED, "Bidirectional byte stream"),
         Capability("display", "ST7789 display", Fidelity.PLANNED, "SPI board model required"),
-        Capability("keyboard", "TCA8418 keyboard", Fidelity.PLANNED, "I2C board model required"),
+        Capability(
+            "keyboard",
+            "TCA8418 keyboard",
+            Fidelity.EMULATED,
+            "I2C FIFO model with typed key injection",
+        ),
         Capability("power", "Battery and power states", Fidelity.PLANNED, "Behavioral model"),
         Capability("wifi", "Wi-Fi RF", Fidelity.UNSUPPORTED, "No physical RF simulation"),
         Capability("ble", "Bluetooth LE RF", Fidelity.UNSUPPORTED, "No physical RF simulation"),

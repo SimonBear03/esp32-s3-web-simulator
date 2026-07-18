@@ -16,10 +16,15 @@ physical device.
 
 ## Status
 
-Repository foundation only. No simulator implementation or hosted service
-exists yet.
+Active implementation. The server-side worker boots real merged ESP32-S3 flash
+images, preserves private flash/NVS state for a session, streams bidirectional
+UART, and supports reset and bounded worker lifecycles. The Cardputer ADV model
+now includes the ESP32-S3 I2C path and a TCA8418 keyboard FIFO with typed web
+input translated through QMP. Display, GPIO interrupt, power, sensor, debugger,
+and hosted-web milestones remain in progress.
 
-The first conformance application is Cardputer Chess. A successful first
+Cardputer Chess is a compatibility and stress application, not the owned
+release gate while that application is itself in progress. A successful first
 device milestone means its unmodified firmware can boot, render through the
 virtual ST7789 display, receive TCA8418 keyboard input, use persistent NVS, and
 complete a game through the web interface.
