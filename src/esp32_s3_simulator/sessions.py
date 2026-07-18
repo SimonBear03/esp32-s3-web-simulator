@@ -6,6 +6,7 @@ import resource
 import shutil
 from collections import deque
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -15,9 +16,10 @@ from uuid import uuid4
 from .boards import BoardProfile
 from .firmware import ValidatedFirmware, validate_and_pad_firmware, write_private_flash_image
 from .framebuffer import RGBFrame, encode_framebuffer_packet, parse_qemu_ppm
+from .gdb import GdbRemoteClient, GdbRemoteError
 from .inputs import qmp_button_event, qmp_imu_sample, qmp_key_event, qmp_power_state
 from .qemu import QemuWorkerConfig, build_qemu_command
-from .qmp import QmpUnavailableError, execute_qmp
+from .qmp import QmpError, QmpUnavailableError, execute_qmp
 from .settings import Settings
 
 
@@ -49,6 +51,7 @@ class SessionState(StrEnum):
 ACTIVE_SESSION_STATES = frozenset(
     {SessionState.STARTING, SessionState.RUNNING, SessionState.PAUSED}
 )
+MAX_DEBUG_BREAKPOINTS = 32
 
 
 @dataclass(slots=True, eq=False)
@@ -61,6 +64,7 @@ class SessionRecord:
     runtime_directory: Path
     flash_path: Path
     qmp_socket_path: Path
+    gdb_socket_path: Path
     state: SessionState = SessionState.STARTING
     exit_code: int | None = None
     process: asyncio.subprocess.Process | None = None
@@ -68,6 +72,10 @@ class SessionRecord:
     serial_buffer: deque[bytes] = field(default_factory=lambda: deque(maxlen=256))
     subscribers: set[asyncio.Queue[bytes | None]] = field(default_factory=set)
     qmp_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    gdb_client: GdbRemoteClient | None = None
+    debug_run_task: asyncio.Task[None] | None = None
+    debug_stop_reason: str | None = None
+    debug_breakpoints: set[int] = field(default_factory=set)
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -134,6 +142,7 @@ class SessionManager:
             runtime_directory = self._settings.runtime_root / session_id
             flash_path = runtime_directory / "flash.bin"
             qmp_socket_path = runtime_directory / "qmp.sock"
+            gdb_socket_path = runtime_directory / "gdb.sock"
             write_private_flash_image(flash_path, flash_image)
 
             session = SessionRecord(
@@ -145,6 +154,7 @@ class SessionManager:
                 runtime_directory=runtime_directory,
                 flash_path=flash_path,
                 qmp_socket_path=qmp_socket_path,
+                gdb_socket_path=gdb_socket_path,
             )
             self._sessions[session_id] = session
 
@@ -164,6 +174,7 @@ class SessionManager:
 
     async def stop(self, session_id: str, *, expired: bool = False) -> SessionRecord:
         session = self.get(session_id)
+        await self._close_debugger(session)
         process = session.process
         if process and process.returncode is None:
             process.terminate()
@@ -248,18 +259,133 @@ class SessionManager:
                 raise SessionTransitionError(f"cannot pause session in {session.state} state")
             await execute_qmp(session.qmp_socket_path, "stop")
             session.state = SessionState.PAUSED
+        debug_run_task = session.debug_run_task
+        if debug_run_task:
+            try:
+                await asyncio.wait_for(asyncio.shield(debug_run_task), timeout=2)
+            except TimeoutError as error:
+                debug_run_task.cancel()
+                await asyncio.gather(debug_run_task, return_exceptions=True)
+                if session.debug_run_task is debug_run_task:
+                    session.debug_run_task = None
+                if session.gdb_client:
+                    await session.gdb_client.close()
+                    session.gdb_client = None
+                raise GdbRemoteError(
+                    "debugger did not acknowledge the paused worker"
+                ) from error
+            if session.debug_stop_reason and session.debug_stop_reason.startswith(
+                "debugger-error:"
+            ):
+                raise GdbRemoteError(session.debug_stop_reason)
         return session
 
     async def resume(self, session_id: str) -> SessionRecord:
         session = self.get(session_id)
         if not self._settings.worker_qmp_enabled:
             raise QmpUnavailableError("QMP session control is disabled for this worker")
-        async with session.qmp_lock:
-            if session.state is not SessionState.PAUSED:
-                raise SessionTransitionError(f"cannot resume session in {session.state} state")
-            await execute_qmp(session.qmp_socket_path, "cont")
+        if session.state is not SessionState.PAUSED:
+            raise SessionTransitionError(f"cannot resume session in {session.state} state")
+        if session.gdb_client:
             session.state = SessionState.RUNNING
+            session.debug_stop_reason = None
+            session.debug_run_task = asyncio.create_task(self._continue_under_debugger(session))
+        else:
+            async with session.qmp_lock:
+                await execute_qmp(session.qmp_socket_path, "cont")
+                session.state = SessionState.RUNNING
         return session
+
+    async def refresh_state(self, session_id: str) -> SessionRecord:
+        session = self.get(session_id)
+        if (
+            session.state not in {SessionState.RUNNING, SessionState.PAUSED}
+            or not self._settings.worker_qmp_enabled
+        ):
+            return session
+        async with session.qmp_lock:
+            status = await execute_qmp(session.qmp_socket_path, "query-status")
+        if isinstance(status, dict):
+            session.state = SessionState.RUNNING if status.get("running") else SessionState.PAUSED
+        return session
+
+    async def debug_registers(self, session_id: str) -> dict[str, int | None]:
+        session = await self._require_paused_debug_session(session_id)
+        client = await self._debug_client(session)
+        return await client.read_registers()
+
+    async def debug_read_memory(self, session_id: str, address: int, length: int) -> bytes:
+        session = await self._require_paused_debug_session(session_id)
+        client = await self._debug_client(session)
+        return await client.read_memory(address, length)
+
+    async def debug_set_breakpoint(self, session_id: str, address: int, enabled: bool) -> None:
+        session = await self._require_paused_debug_session(session_id)
+        client = await self._debug_client(session)
+        if enabled:
+            if (
+                address not in session.debug_breakpoints
+                and len(session.debug_breakpoints) >= MAX_DEBUG_BREAKPOINTS
+            ):
+                raise GdbRemoteError(
+                    f"a session may have at most {MAX_DEBUG_BREAKPOINTS} breakpoints"
+                )
+            await client.add_breakpoint(address)
+            session.debug_breakpoints.add(address)
+        else:
+            await client.remove_breakpoint(address)
+            session.debug_breakpoints.discard(address)
+
+    async def debug_step(self, session_id: str) -> str:
+        session = await self._require_paused_debug_session(session_id)
+        reply = await (await self._debug_client(session)).step()
+        session.debug_stop_reason = reply
+        return reply
+
+    async def _require_paused_debug_session(self, session_id: str) -> SessionRecord:
+        session = await self.refresh_state(session_id)
+        if session.state is not SessionState.PAUSED:
+            raise SessionTransitionError("debug operations require a paused session")
+        if not (
+            self._settings.worker_debug_enabled
+            and self._settings.worker_qmp_enabled
+        ):
+            raise GdbRemoteError("private GDB worker access is disabled")
+        return session
+
+    async def _debug_client(self, session: SessionRecord) -> GdbRemoteClient:
+        if session.gdb_client is None:
+            session.gdb_client = await GdbRemoteClient.connect(session.gdb_socket_path)
+        return session.gdb_client
+
+    async def _continue_under_debugger(self, session: SessionRecord) -> None:
+        try:
+            if session.gdb_client is None:
+                raise GdbRemoteError("debugger is not connected")
+            session.debug_stop_reason = await session.gdb_client.continue_execution()
+            if session.state is SessionState.RUNNING:
+                session.state = SessionState.PAUSED
+        except GdbRemoteError as error:
+            session.debug_stop_reason = f"debugger-error: {error}"
+            with suppress(QmpError):
+                await self.refresh_state(session.id)
+            client = session.gdb_client
+            session.gdb_client = None
+            if client:
+                await client.close()
+        finally:
+            session.debug_run_task = None
+
+    async def _close_debugger(self, session: SessionRecord) -> None:
+        task = session.debug_run_task
+        session.debug_run_task = None
+        if task and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        client = session.gdb_client
+        session.gdb_client = None
+        if client:
+            await client.close()
 
     async def reset(self, session_id: str) -> SessionRecord:
         session = self.get(session_id)
@@ -333,6 +459,12 @@ class SessionManager:
             session.board,
             session.flash_path,
             session.qmp_socket_path if self._settings.worker_qmp_enabled else None,
+            (
+                session.gdb_socket_path
+                if self._settings.worker_debug_enabled
+                and self._settings.worker_qmp_enabled
+                else None
+            ),
         )
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -359,6 +491,7 @@ class SessionManager:
             session.serial_buffer.append(chunk)
             self._publish(session, chunk)
         session.exit_code = await process.wait()
+        await self._close_debugger(session)
         if session.state in {SessionState.RUNNING, SessionState.PAUSED}:
             session.state = SessionState.STOPPED if session.exit_code == 0 else SessionState.FAILED
         self._publish(session, None)

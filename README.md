@@ -27,7 +27,10 @@ assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
 passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
 and button input are now live on StickS3; its behavioral BMI270 and M5PM1 models
 accept deterministic runtime samples through the typed web protocol. Cardputer
-power, debugger, and hosted-web milestones remain in progress.
+power and hosted-web milestones remain in progress. A bounded debugger now
+supports synchronized pause/resume, Xtensa register snapshots, memory reads,
+hardware breakpoints, and single-step on both profiles. QEMU's raw GDB socket
+remains private to each worker and is never proxied to a browser.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. A successful first
@@ -50,7 +53,8 @@ It will not initially claim physical validation of BLE/RF behavior, electrical
 current draw, thermals, acoustic output, or real IMU noise and calibration.
 
 See [docs/architecture.md](docs/architecture.md) for the initial system and
-licensing boundaries.
+licensing boundaries. The current trust boundary and production hardening gates
+are explicit in [docs/security.md](docs/security.md).
 
 ## Development
 

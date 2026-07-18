@@ -7,12 +7,15 @@ from httpx import ASGITransport, AsyncClient
 from esp32_s3_simulator.api import (
     INPUT_MESSAGE_ADAPTER,
     ButtonInputMessage,
+    DebugBreakpointMessage,
+    DebugMemoryReadMessage,
     ImuInputMessage,
     KeyInputMessage,
     PowerInputMessage,
     SessionControlMessage,
     create_app,
 )
+from esp32_s3_simulator.sessions import SessionState
 from esp32_s3_simulator.settings import Settings
 
 
@@ -77,6 +80,11 @@ def test_input_message_contract_rejects_untyped_payloads() -> None:
         PowerInputMessage,
     )
     assert SessionControlMessage.model_validate({"action": "pause"}).action == "pause"
+    assert (
+        DebugMemoryReadMessage.model_validate({"address": 0x42000000, "length": 4096}).length
+        == 4096
+    )
+    assert DebugBreakpointMessage.model_validate({"address": 0x42000000, "enabled": True}).enabled
 
 
 async def test_session_creation_fails_closed_without_worker(tmp_path: Path) -> None:
@@ -117,3 +125,76 @@ async def test_session_control_contract_rejects_invalid_or_missing_sessions(
 
     assert invalid.status_code == 422
     assert missing.status_code == 404
+
+
+async def test_debug_api_is_typed_bounded_and_does_not_expose_raw_gdb(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_app(disabled_settings(tmp_path))
+    manager = app.state.session_manager
+
+    class FakeSession:
+        state = SessionState.PAUSED
+        debug_stop_reason = "T05thread:1;"
+
+    async def refresh_state(session_id: str) -> FakeSession:
+        assert session_id == "session-id"
+        return FakeSession()
+
+    async def debug_registers(session_id: str) -> dict[str, int]:
+        assert session_id == "session-id"
+        return {"pc": 0x42000000}
+
+    async def debug_read_memory(session_id: str, address: int, length: int) -> bytes:
+        assert (session_id, address, length) == ("session-id", 0x42000000, 4)
+        return b"\x01\x02\x03\x04"
+
+    breakpoint_calls: list[tuple[str, int, bool]] = []
+
+    async def debug_set_breakpoint(session_id: str, address: int, enabled: bool) -> None:
+        breakpoint_calls.append((session_id, address, enabled))
+
+    async def debug_step(session_id: str) -> str:
+        assert session_id == "session-id"
+        return "T05thread:1;"
+
+    monkeypatch.setattr(manager, "refresh_state", refresh_state)
+    monkeypatch.setattr(manager, "debug_registers", debug_registers)
+    monkeypatch.setattr(manager, "debug_read_memory", debug_read_memory)
+    monkeypatch.setattr(manager, "debug_set_breakpoint", debug_set_breakpoint)
+    monkeypatch.setattr(manager, "debug_step", debug_step)
+
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://simulator.test") as client,
+    ):
+        status = (await client.get("/v1/sessions/session-id/debug/status")).json()
+        registers = (await client.get("/v1/sessions/session-id/debug/registers")).json()
+        memory = (
+            await client.post(
+                "/v1/sessions/session-id/debug/memory",
+                json={"address": 0x42000000, "length": 4},
+            )
+        ).json()
+        breakpoint = (
+            await client.post(
+                "/v1/sessions/session-id/debug/breakpoint",
+                json={"address": 0x42000000, "enabled": True},
+            )
+        ).json()
+        step = (await client.post("/v1/sessions/session-id/debug/step")).json()
+        oversized = await client.post(
+            "/v1/sessions/session-id/debug/memory",
+            json={"address": 0, "length": 4097},
+        )
+
+    assert status["state"] == "paused"
+    assert status["capabilities"]["memory_read_max_bytes"] == 4096
+    assert status["capabilities"]["hardware_breakpoints_max"] == 32
+    assert status["capabilities"]["raw_gdb"] is False
+    assert registers == {"registers": {"pc": 0x42000000}}
+    assert memory == {"address": 0x42000000, "length": 4, "data_hex": "01020304"}
+    assert breakpoint == {"address": 0x42000000, "enabled": True}
+    assert breakpoint_calls == [("session-id", 0x42000000, True)]
+    assert step == {"stop_reason": "T05thread:1;"}
+    assert oversized.status_code == 422

@@ -23,6 +23,7 @@ def build_qemu_command(
     board: BoardProfile,
     flash_path: Path,
     qmp_socket_path: Path | None,
+    gdb_socket_path: Path | None,
 ) -> tuple[str, ...]:
     command = [
         str(config.executable),
@@ -40,6 +41,15 @@ def build_qemu_command(
     ]
     if qmp_socket_path is not None:
         command.extend(("-qmp", f"unix:{qmp_socket_path},server=on,wait=off"))
+    if gdb_socket_path is not None:
+        command.extend(
+            (
+                "-chardev",
+                f"socket,path={gdb_socket_path},server=on,wait=off,id=gdb0",
+                "-gdb",
+                "chardev:gdb0",
+            )
+        )
     if board.psram_size_mib:
         command.extend(("-m", f"{board.psram_size_mib}M"))
     command.extend(("-drive", f"file={flash_path},if=mtd,format=raw"))

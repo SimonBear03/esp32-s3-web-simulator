@@ -55,6 +55,7 @@ async def run(args: argparse.Namespace) -> None:
             rom_directory=args.rom_directory.resolve(),
             native_workers_enabled=True,
             worker_qmp_enabled=args.qmp,
+            worker_debug_enabled=args.qmp,
             session_ttl_seconds=30,
             worker_memory_limit_mib=1536,
             worker_cpu_limit_seconds=20,
@@ -100,6 +101,18 @@ async def run(args: argparse.Namespace) -> None:
                 await manager.pause(session.id)
                 if session.state is not SessionState.PAUSED:
                     raise RuntimeError("session did not enter paused state")
+                registers = await manager.debug_registers(session.id)
+                pc = registers.get("pc")
+                if not isinstance(pc, int):
+                    raise RuntimeError("debugger did not expose the Xtensa PC register")
+                instruction = await manager.debug_read_memory(session.id, pc, 4)
+                if len(instruction) != 4:
+                    raise RuntimeError("debugger returned a short instruction read")
+                await manager.debug_set_breakpoint(session.id, pc, True)
+                await manager.debug_set_breakpoint(session.id, pc, False)
+                stop_reason = await manager.debug_step(session.id)
+                if not stop_reason.startswith(("S", "T")):
+                    raise RuntimeError("debugger single-step did not stop the CPU")
                 await asyncio.sleep(0.1)
                 paused_heartbeat_count = serial_text(session).count("SIM:HEARTBEAT")
                 await asyncio.sleep(0.65)

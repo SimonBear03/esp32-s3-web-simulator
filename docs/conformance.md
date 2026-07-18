@@ -23,6 +23,16 @@ The restricted test sandbox rejects Unix-domain socket creation, so the final
 release-gate runs used a permitted execution boundary with each worker's normal
 private QMP socket enabled. Production conformance keeps QMP mandatory.
 
+The same 2026-07-19 release gate enabled a private GDB Unix socket for each
+worker. For both Cardputer ADV and StickS3 the service paused QEMU, negotiated
+the Xtensa remote protocol, read the program counter and four instruction
+bytes at that address, added and removed a hardware breakpoint, single-stepped,
+proved UART heartbeats remained frozen while paused, resumed under the
+debugger, and observed the next heartbeat. Reset, framebuffer, inputs, NVS, IMU,
+and power checks then continued in the same sessions. Espressif's target does
+not advertise GDB feature XML, so the client fallback for registers 0 through
+83 is pinned to QEMU's own ESP32-S3 register map and covered by a unit test.
+
 The pinned worker and owned Cardputer firmware were exercised through the real
 service runner. QMP accepted `input-send-event` for
 an `A` key down/up pair. Firmware polling the emulated TCA8418 FIFO observed

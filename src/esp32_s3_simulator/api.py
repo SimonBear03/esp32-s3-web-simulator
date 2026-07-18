@@ -11,9 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from . import __version__
 from .boards import BOARD_PROFILES, get_board_profile
 from .firmware import FirmwareValidationError
+from .gdb import GdbRemoteError
 from .inputs import BoardInputError
 from .qmp import QmpError
 from .sessions import (
+    MAX_DEBUG_BREAKPOINTS,
     SessionCapacityError,
     SessionManager,
     SessionNotFoundError,
@@ -84,6 +86,20 @@ class SessionControlMessage(BaseModel):
     action: Literal["pause", "resume", "reset"]
 
 
+class DebugMemoryReadMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    address: Annotated[int, Field(ge=0, le=0xFFFFFFFF)]
+    length: Annotated[int, Field(ge=1, le=4096)]
+
+
+class DebugBreakpointMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    address: Annotated[int, Field(ge=0, le=0xFFFFFFFF)]
+    enabled: bool
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or Settings.from_environment()
     manager = SessionManager(resolved_settings)
@@ -140,9 +156,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/sessions/{session_id}")
     async def get_session(session_id: str) -> dict[str, object]:
         try:
-            return manager.get(session_id).public_dict()
+            return (await manager.refresh_state(session_id)).public_dict()
         except SessionNotFoundError as error:
             raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except QmpError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.delete("/v1/sessions/{session_id}")
     async def stop_session(session_id: str) -> dict[str, object]:
@@ -167,7 +185,85 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="simulation session not found") from error
         except SessionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GdbRemoteError, QmpError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/v1/sessions/{session_id}/debug/status")
+    async def debug_status(session_id: str) -> dict[str, object]:
+        try:
+            session = await manager.refresh_state(session_id)
+            return {
+                "state": session.state,
+                "stop_reason": session.debug_stop_reason,
+                "enabled": (
+                    resolved_settings.worker_debug_enabled
+                    and resolved_settings.worker_qmp_enabled
+                ),
+                "capabilities": {
+                    "register_read": True,
+                    "memory_read_max_bytes": 4096,
+                    "hardware_breakpoints_max": MAX_DEBUG_BREAKPOINTS,
+                    "single_step": True,
+                    "memory_write": False,
+                    "register_write": False,
+                    "raw_gdb": False,
+                },
+            }
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
         except QmpError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/v1/sessions/{session_id}/debug/registers")
+    async def debug_registers(session_id: str) -> dict[str, object]:
+        try:
+            return {"registers": await manager.debug_registers(session_id)}
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except SessionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GdbRemoteError, QmpError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.post("/v1/sessions/{session_id}/debug/memory")
+    async def debug_memory(session_id: str, request: DebugMemoryReadMessage) -> dict[str, object]:
+        try:
+            data = await manager.debug_read_memory(session_id, request.address, request.length)
+            return {
+                "address": request.address,
+                "length": len(data),
+                "data_hex": data.hex(),
+            }
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except SessionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GdbRemoteError, QmpError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.post("/v1/sessions/{session_id}/debug/breakpoint")
+    async def debug_breakpoint(
+        session_id: str, request: DebugBreakpointMessage
+    ) -> dict[str, object]:
+        try:
+            await manager.debug_set_breakpoint(session_id, request.address, request.enabled)
+            return {"address": request.address, "enabled": request.enabled}
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except SessionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GdbRemoteError, QmpError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.post("/v1/sessions/{session_id}/debug/step")
+    async def debug_step(session_id: str) -> dict[str, object]:
+        try:
+            return {"stop_reason": await manager.debug_step(session_id)}
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except SessionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GdbRemoteError, QmpError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.websocket("/v1/sessions/{session_id}/serial")

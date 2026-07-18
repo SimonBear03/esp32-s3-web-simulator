@@ -60,12 +60,22 @@ buttons, NVS, overlays, and graceful behavior when BLE is unavailable.
 
 ## Debugging Contract
 
-The product should eventually expose:
+The product currently exposes:
 
-- UART console and panic/backtrace decoding
-- pause, resume, reset, and deterministic replay
+- bidirectional UART and pause, resume, and reset;
 - breakpoints plus CPU register and memory inspection
-- GDB integration where supported by the emulator
+- single-step and synchronized debugger stop state through private GDB
+  integration.
+
+The browser-facing debugger is deliberately narrower than GDB. It permits
+register reads, memory reads of at most 4096 bytes, at most 32 hardware
+breakpoints, and single-step only while paused. It does not permit memory or
+register writes and never exposes raw GDB or QMP.
+
+Later debugging work should add:
+
+- panic/backtrace decoding and source symbols from an explicitly uploaded ELF;
+- deterministic replay;
 - SPI, I2C, GPIO, timing, and power-event traces
 - downloadable session diagnostics that exclude uploaded firmware by default
 

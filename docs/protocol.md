@@ -29,9 +29,12 @@ a flash image.
 The response includes an opaque session ID, board ID, timestamps, state, exit
 code when known, and non-secret firmware metadata.
 
-Production workers enable a private QMP Unix socket for control and debugging.
+Production workers enable private QMP and GDB Unix sockets for worker control.
 `SIMULATOR_WORKER_QMP_ENABLED=false` exists only for constrained test sandboxes
 that prohibit local socket binding; it is not a production configuration.
+`SIMULATOR_WORKER_DEBUG_ENABLED=false` disables the GDB socket and typed debug
+operations; debugging also requires QMP so run state can remain synchronized.
+Neither private socket is part of the public protocol.
 
 ## Session state
 
@@ -106,8 +109,35 @@ values are bounded to 0–6000 mV and are exposed through the behavioral M5PM1
 register model. An acknowledgement means QEMU accepted the transition, not
 that real hardware behavior has been certified.
 
+## Debugger
+
+Debugger operations require a paused session. Clients pause and resume with the
+normal session-control endpoint, then use:
+
+- `GET /v1/sessions/{id}/debug/status` for run state, the last GDB stop reply,
+  and the exact capability limits;
+- `GET /v1/sessions/{id}/debug/registers` for the ESP32-S3 Xtensa core-register
+  snapshot;
+- `POST /v1/sessions/{id}/debug/memory` with an unsigned 32-bit `address` and a
+  `length` from 1 through 4096;
+- `POST /v1/sessions/{id}/debug/breakpoint` with an unsigned 32-bit `address`
+  and boolean `enabled` value;
+- `POST /v1/sessions/{id}/debug/step` to execute one guest instruction and
+  return its GDB stop reply.
+
+Memory data is returned as lowercase hexadecimal in `data_hex`. A session may
+hold at most 32 hardware breakpoints. Register or memory writes, arbitrary GDB
+packets, monitor commands, and raw QMP are deliberately absent. QEMU's
+unauthenticated GDB endpoint is attached only to a Unix socket inside the
+private session directory; the service translates this bounded API instead of
+exposing or tunnelling that socket.
+
+If the guest reaches a breakpoint after resume, its state changes back to
+`paused` and `debug/status` reports the stop reply. Clients should poll session
+or debug status until the later event-stream protocol is implemented.
+
 ## Pending protocol surfaces
 
-Breakpoints, memory inspection, deterministic traces, and Cardputer ADV power
-events remain pending. They are not represented as fake-success endpoints
-until their worker implementations exist.
+Deterministic peripheral traces and Cardputer ADV power events remain pending.
+They are not represented as fake-success endpoints until their worker
+implementations exist.

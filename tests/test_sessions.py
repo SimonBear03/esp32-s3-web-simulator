@@ -11,7 +11,9 @@ import esp32_s3_simulator.sessions as sessions_module
 from esp32_s3_simulator.boards import CARDPUTER_ADV, STICKS3, BoardProfile
 from esp32_s3_simulator.firmware import ValidatedFirmware
 from esp32_s3_simulator.framebuffer import RGBFrame, parse_framebuffer_packet
+from esp32_s3_simulator.gdb import GdbRemoteError
 from esp32_s3_simulator.sessions import (
+    MAX_DEBUG_BREAKPOINTS,
     SessionManager,
     SessionRecord,
     SessionState,
@@ -50,6 +52,7 @@ def manager_with_session(
         runtime_directory=runtime_directory,
         flash_path=runtime_directory / "flash.bin",
         qmp_socket_path=runtime_directory / "qmp.sock",
+        gdb_socket_path=runtime_directory / "gdb.sock",
         state=SessionState.RUNNING,
     )
     manager._sessions[session.id] = session
@@ -173,3 +176,83 @@ async def test_serial_subscription_remains_attached_while_paused(tmp_path: Path)
 
     assert await pending == b"after-resume"
     await updates.aclose()
+
+
+async def test_debugger_requires_pause_and_enforces_breakpoint_quota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+
+    class FakeGdbClient:
+        async def read_registers(self) -> dict[str, int]:
+            return {"pc": 0x42000000}
+
+        async def read_memory(self, address: int, length: int) -> bytes:
+            assert address == 0x42000000
+            return bytes(range(length))
+
+        async def add_breakpoint(self, _address: int) -> None:
+            pass
+
+        async def remove_breakpoint(self, _address: int) -> None:
+            pass
+
+        async def step(self) -> str:
+            return "T05thread:1;"
+
+    async def execute_qmp(
+        _socket: Path, command: str, _arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        assert command == "query-status"
+        return {"running": session.state is SessionState.RUNNING}
+
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+    session.gdb_client = FakeGdbClient()  # type: ignore[assignment]
+
+    with pytest.raises(SessionTransitionError, match="require a paused session"):
+        await manager.debug_registers(session.id)
+
+    session.state = SessionState.PAUSED
+    assert await manager.debug_registers(session.id) == {"pc": 0x42000000}
+    assert await manager.debug_read_memory(session.id, 0x42000000, 4) == bytes(range(4))
+    assert await manager.debug_step(session.id) == "T05thread:1;"
+
+    for address in range(MAX_DEBUG_BREAKPOINTS):
+        await manager.debug_set_breakpoint(session.id, address, True)
+    with pytest.raises(GdbRemoteError, match="at most 32"):
+        await manager.debug_set_breakpoint(session.id, MAX_DEBUG_BREAKPOINTS, True)
+
+    await manager.debug_set_breakpoint(session.id, 0, False)
+    await manager.debug_set_breakpoint(session.id, MAX_DEBUG_BREAKPOINTS, True)
+
+
+async def test_debugger_resume_and_qmp_pause_keep_stop_state_synchronized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.state = SessionState.PAUSED
+    stopped = asyncio.Event()
+
+    class FakeGdbClient:
+        async def continue_execution(self) -> str:
+            await stopped.wait()
+            return "T02thread:1;"
+
+        async def close(self) -> None:
+            pass
+
+    async def execute_qmp(
+        _socket: Path, command: str, _arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        assert command == "stop"
+        stopped.set()
+        return {}
+
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+    session.gdb_client = FakeGdbClient()  # type: ignore[assignment]
+
+    assert (await manager.resume(session.id)).state is SessionState.RUNNING
+    assert session.debug_run_task is not None
+    assert (await manager.pause(session.id)).state is SessionState.PAUSED
+    assert session.debug_run_task is None
+    assert session.debug_stop_reason == "T02thread:1;"

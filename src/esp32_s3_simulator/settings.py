@@ -19,6 +19,7 @@ class Settings:
     rom_directory: Path
     native_workers_enabled: bool = False
     worker_qmp_enabled: bool = True
+    worker_debug_enabled: bool = True
     max_concurrent_sessions: int = 2
     session_ttl_seconds: int = 120
     worker_memory_limit_mib: int = 1536
@@ -45,6 +46,7 @@ class Settings:
             ).resolve(),
             native_workers_enabled=_read_bool("SIMULATOR_NATIVE_WORKERS_ENABLED", False),
             worker_qmp_enabled=_read_bool("SIMULATOR_WORKER_QMP_ENABLED", True),
+            worker_debug_enabled=_read_bool("SIMULATOR_WORKER_DEBUG_ENABLED", True),
             max_concurrent_sessions=int(os.environ.get("SIMULATOR_MAX_SESSIONS", "2")),
             session_ttl_seconds=int(os.environ.get("SIMULATOR_SESSION_TTL_SECONDS", "120")),
             worker_memory_limit_mib=int(
