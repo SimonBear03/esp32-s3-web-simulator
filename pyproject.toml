@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "esp32-s3-web-simulator"
+version = "0.1.0"
+description = "Browser-operated ESP32-S3 firmware simulator service"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-2.0-only"
+authors = [{ name = "ESP32-S3 Web Simulator contributors" }]
+dependencies = [
+  "fastapi>=0.116,<1",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+esp32-s3-simulator = "esp32_s3_simulator.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/esp32_s3_simulator"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

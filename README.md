@@ -60,6 +60,10 @@ Run the repository foundation checks with:
 make check
 ```
 
+`make check` validates repository policy, lints the service, and runs its test
+suite. The versioned browser/service contract is documented in
+[docs/protocol.md](docs/protocol.md).
+
 ## Remote
 
 `origin` points to the public GitHub repository:

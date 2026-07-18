@@ -40,6 +40,14 @@ proves the GigaDevice QE patch fixes the flash-initialization blocker. It does
 not prove Cardputer ADV keyboard or display compatibility; those require the
 simulator-owned fixture and explicit peripheral models.
 
+The same snapshot was then run for four seconds through the public service's
+`SessionManager`, with guest networking disabled and native worker resource
+limits enabled. The manager reported `running`, captured 363 serial bytes,
+stopped the process, and removed the private runtime directory. QMP socket
+binding could not be exercised inside the Codex sandbox because that sandbox
+rejects all Unix-domain socket binds with `EPERM`; QMP remains enabled by
+default and must be live-tested in the deployment boundary.
+
 ## Evidence rules
 
 - Record the exact QEMU commit, patch set, firmware source revision, build
