@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +102,8 @@ async def execute_qmp(
     except TimeoutError as error:
         raise QmpUnavailableError(f"QMP command timed out: {command}") from error
     finally:
+        # A QMP request is complete once its matching response has arrived.  Do
+        # not await the peer side of this one-shot UNIX connection: QEMU may
+        # reset it immediately after accepting an input event, and asyncio then
+        # re-raises that peer reset from wait_closed() as if the command failed.
         writer.close()
-        with suppress(ConnectionError):
-            await writer.wait_closed()

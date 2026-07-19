@@ -14,6 +14,7 @@ class FakeWriter:
     def __init__(self) -> None:
         self.writes: list[bytes] = []
         self.closed = False
+        self.waited_closed = False
 
     def write(self, payload: bytes) -> None:
         self.writes.append(payload)
@@ -25,7 +26,7 @@ class FakeWriter:
         self.closed = True
 
     async def wait_closed(self) -> None:
-        pass
+        self.waited_closed = True
 
 
 def qmp_reader(*messages: dict[str, Any]) -> asyncio.StreamReader:
@@ -67,6 +68,7 @@ async def test_execute_qmp_negotiates_capabilities_and_sends_command(
         },
     ]
     assert writer.closed
+    assert not writer.waited_closed
 
 
 async def test_execute_qmp_surfaces_command_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,7 +105,7 @@ async def test_execute_qmp_preserves_scalar_qom_results(
     assert await qmp.execute_qmp(Path("/runtime/qmp.sock"), "qom-get") is True
 
 
-async def test_execute_qmp_ignores_peer_reset_during_socket_cleanup(
+async def test_execute_qmp_does_not_wait_for_peer_cleanup_after_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reader = qmp_reader(
@@ -127,3 +129,4 @@ async def test_execute_qmp_ignores_peer_reset_during_socket_cleanup(
         "accepted": True
     }
     assert writer.closed
+    assert not writer.waited_closed
