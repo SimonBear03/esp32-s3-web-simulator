@@ -206,9 +206,29 @@ coverage and the exact application rerun both passed after that change.
 The preceding Chess revision at `5699ef4` also exposed application-owned stack
 overflows when entering a game and then starting its search task. Those were
 separated with a disposable stack-only diagnostic build and were never treated
-as emulator failures. The newest unmodified revision completes one human and
-one engine turn without either failure. A complete legal game remains an open
-stress milestone, not a claimed result.
+as emulator failures.
+
+A follow-up run drove the newest unmodified revision through real Cardputer key
+events for a complete 39-ply legal game. A host UCI process chose only the human
+side's legal moves; every black move was computed inside the emulated ESP32 and
+discovered from the firmware's rendered last-move squares. The game was:
+
+```text
+1. Nc3 e5 2. Nf3 b5 3. Nxe5 Qf6 4. d4 a5 5. Nxb5 Be7
+6. Nxc7+ Kd8 7. Nxa8 Nh6 8. Bd2 Na6 9. Bxa5+ Qb6
+10. Bxb6+ Nc7 11. Bxc7+ Ke8 12. Nb6 f6 13. Nxc8 Nf7
+14. Nxe7 h5 15. N5g6 Nh6 16. Nxh8 Nf7 17. Nhg6 Nh8
+18. e4 Nf7 19. Nf5 d6 20. Bb5# 1-0
+```
+
+The game-over framebuffer SHA-256 was
+`6e0d8fa2adb1aa2ec73c95fdafef585820f74bbee9cd9ae11a55c507f86c1a3c`.
+The worker remained `running`, displayed `White wins`, accepted Enter through
+the keyboard, and returned to setup with framebuffer SHA-256
+`e8bb7351716a3e987de41b23bb95eb130fd0a8879122abe8ce2740439abe4028`.
+This completes the application-level boot, NVS, display, keyboard, embedded
+search, checkmate, game-over, and new-game compatibility milestone without
+modifying or redistributing the application firmware.
 
 ## Evidence rules
 

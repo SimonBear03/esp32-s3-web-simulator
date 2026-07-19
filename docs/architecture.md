@@ -55,6 +55,11 @@ accept keyboard controls, preserve preferences across restarts, and support
 playing a complete game. Because that application is in progress, it does not
 replace the simulator-owned conformance firmware as the release gate.
 
+The unmodified application revision `99503e0` has now completed that milestone:
+it preserved its saved level across a simulated reset and played a 39-ply game
+through checkmate and back to setup. Exact evidence remains in
+`docs/conformance.md`; owned firmware continues to gate releases.
+
 The existing StickS3 companion is the second acceptance application for display,
 buttons, NVS, overlays, and graceful behavior when BLE is unavailable.
 
