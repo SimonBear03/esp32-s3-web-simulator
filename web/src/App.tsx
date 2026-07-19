@@ -41,6 +41,7 @@ export function App() {
     session && ["starting", "running", "paused"].includes(session.state),
   );
   const sessionId = active && session ? session.id : null;
+  const streamGeneration = active && session ? session.generation : 0;
   const inputEnabled = session?.state === "running" && inputConnected;
 
   const onKey = useCallback(
@@ -117,6 +118,7 @@ export function App() {
             onButton={onButton}
             onKey={onKey}
             sessionId={sessionId}
+            streamGeneration={streamGeneration}
           />
         </div>
         <div
@@ -133,7 +135,7 @@ export function App() {
       </div>
 
       <div className="serial-region" data-mobile-active={mobilePanel === "serial"}>
-        <SerialDock sessionId={sessionId} />
+        <SerialDock sessionId={sessionId} streamGeneration={streamGeneration} />
       </div>
       <MobilePanelNav onChange={setMobilePanel} panel={mobilePanel} />
       <StatusBar inputConnected={inputConnected} expiresAt={session?.expires_at ?? null} />

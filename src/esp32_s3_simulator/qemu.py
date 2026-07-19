@@ -6,6 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .boards import BoardProfile
+from .tracing import TRACE_EVENT_NAMES
 
 
 class WorkerSandboxMode(StrEnum):
@@ -54,6 +55,7 @@ def _direct_qemu_command(
     flash_path: Path,
     qmp_socket_path: Path | None,
     gdb_socket_path: Path | None,
+    trace_enabled: bool,
 ) -> tuple[str, ...]:
     command = [
         str(config.executable),
@@ -80,6 +82,10 @@ def _direct_qemu_command(
                 "chardev:gdb0",
             )
         )
+    if trace_enabled:
+        for event_name in TRACE_EVENT_NAMES:
+            command.extend(("-trace", f"enable={event_name}"))
+        command.extend(("-trace", "file=/dev/stderr"))
     if board.psram_size_mib:
         command.extend(("-m", f"{board.psram_size_mib}M"))
     command.extend(("-drive", f"file={flash_path},if=mtd,format=raw"))
@@ -161,6 +167,8 @@ def build_qemu_command(
     flash_path: Path,
     qmp_socket_path: Path | None,
     gdb_socket_path: Path | None,
+    *,
+    trace_enabled: bool = False,
 ) -> tuple[str, ...]:
     qemu_command = _direct_qemu_command(
         config,
@@ -168,6 +176,7 @@ def build_qemu_command(
         flash_path,
         qmp_socket_path,
         gdb_socket_path,
+        trace_enabled,
     )
     if config.sandbox_mode is WorkerSandboxMode.DIRECT:
         return qemu_command

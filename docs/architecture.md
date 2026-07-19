@@ -57,10 +57,11 @@ accept keyboard controls, preserve preferences across restarts, and support
 playing a complete game. Because that application is in progress, it does not
 replace the simulator-owned conformance firmware as the release gate.
 
-The unmodified application revision `99503e0` has now completed that milestone:
-it preserved its saved level across a simulated reset and played a 39-ply game
-through checkmate and back to setup. Exact evidence remains in
-`docs/conformance.md`; owned firmware continues to gate releases.
+Unmodified application revisions have completed that milestone, most recently
+repair-branch revision `85b2672`: it preserved its saved level across a
+simulated reset and played through checkmate and back to setup. Exact evidence,
+including the separate currently failing application `main` revision, remains
+in `docs/conformance.md`; owned firmware continues to gate releases.
 
 The existing StickS3 companion is the second acceptance application for display,
 buttons, NVS, overlays, and graceful behavior when BLE is unavailable.
@@ -70,9 +71,12 @@ buttons, NVS, overlays, and graceful behavior when BLE is unavailable.
 The product currently exposes:
 
 - bidirectional UART and pause, resume, and reset;
-- breakpoints plus CPU register and memory inspection
+- breakpoints plus CPU register and memory inspection;
 - single-step and synchronized debugger stop state through private GDB
-  integration.
+  integration;
+- bounded typed event recording and privacy-preserving diagnostics;
+- native SPI, I2C, GPIO, display, input, IMU, power, and ADC traces;
+- deterministic external-input replay from the uploaded flash/NVS baseline.
 
 The browser-facing debugger is deliberately narrower than GDB. It permits
 register reads, memory reads of at most 4096 bytes, at most 32 hardware
@@ -82,9 +86,7 @@ register writes and never exposes raw GDB or QMP.
 Later debugging work should add:
 
 - panic/backtrace decoding and source symbols from an explicitly uploaded ELF;
-- deterministic replay;
-- SPI, I2C, GPIO, timing, and power-event traces
-- downloadable session diagnostics that exclude uploaded firmware by default
+- instruction/timing traces and back-in-time CPU-state replay.
 
 ## Power Fidelity
 

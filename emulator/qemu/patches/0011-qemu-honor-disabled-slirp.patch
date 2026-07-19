@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000011 Mon Sep 17 00:00:00 2001
+From: ESP32-S3 Web Simulator contributors <noreply@example.com>
+Date: Sun, 19 Jul 2026 21:15:00 +0800
+Subject: [PATCH 11/11] build: honor explicitly disabled slirp
+
+The disabled feature state is not auto, so the old condition entered the
+dependency block and wrapped a disabled dependency in a declare_dependency.
+Keep SLiRP absent when the operator explicitly compiles it out.
+
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -1216,7 +1216,7 @@ else
+ endif
+ 
+ slirp = not_found
+-if not get_option('slirp').auto() or have_system
++if get_option('slirp').enabled() or (get_option('slirp').auto() and have_system)
+   slirp_dep = dependency('slirp', required: get_option('slirp'),
+                      method: 'pkg-config',
+                      static: true)
+-- 
+2.43.0

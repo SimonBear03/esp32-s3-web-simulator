@@ -4,6 +4,7 @@ import asyncio
 import os
 import resource
 import shutil
+import time
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -20,7 +21,9 @@ from .gdb import GdbRemoteClient, GdbRemoteError
 from .inputs import qmp_button_event, qmp_imu_sample, qmp_key_event, qmp_power_state
 from .qemu import QemuWorkerConfig, build_qemu_command
 from .qmp import QmpError, QmpUnavailableError, execute_qmp
+from .recording import ReplayAction, SessionEvent, serial_metadata
 from .settings import Settings
+from .tracing import TRACE_EVENT_LIMITS, parse_worker_trace_line
 
 
 class SessionCapacityError(RuntimeError):
@@ -65,10 +68,12 @@ class SessionRecord:
     flash_path: Path
     qmp_socket_path: Path
     gdb_socket_path: Path
+    initial_flash_image: bytes = field(default=b"", repr=False)
     state: SessionState = SessionState.STARTING
     exit_code: int | None = None
     process: asyncio.subprocess.Process | None = None
     reader_task: asyncio.Task[None] | None = None
+    trace_reader_task: asyncio.Task[None] | None = None
     serial_buffer: deque[bytes] = field(default_factory=lambda: deque(maxlen=256))
     subscribers: set[asyncio.Queue[bytes | None]] = field(default_factory=set)
     qmp_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -76,6 +81,23 @@ class SessionRecord:
     debug_run_task: asyncio.Task[None] | None = None
     debug_stop_reason: str | None = None
     debug_breakpoints: set[int] = field(default_factory=set)
+    generation: int = 1
+    generation_started_ns: int = field(default_factory=time.monotonic_ns)
+    next_event_sequence: int = 1
+    events: deque[SessionEvent] = field(default_factory=deque)
+    events_dropped: int = 0
+    replay_actions: deque[ReplayAction] = field(default_factory=deque, repr=False)
+    replay_actions_dropped: int = 0
+    replay_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    replay_status: str = "idle"
+    replay_error: str | None = None
+    replay_speed: float | None = None
+    accept_live_input: bool = True
+    serial_output_bytes: int = 0
+    trace_events_recorded: int = 0
+    trace_events_dropped: int = 0
+    trace_event_counts: dict[str, int] = field(default_factory=dict, repr=False)
+    trace_truncation_reported: bool = False
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -86,6 +108,20 @@ class SessionRecord:
             "expires_at": self.expires_at,
             "exit_code": self.exit_code,
             "firmware": asdict(self.firmware),
+            "generation": self.generation,
+            "recording": {
+                "event_count": len(self.events),
+                "events_dropped": self.events_dropped,
+                "replayable_action_count": len(self.replay_actions),
+                "replayable_actions_dropped": self.replay_actions_dropped,
+                "trace_events_recorded": self.trace_events_recorded,
+                "trace_events_dropped": self.trace_events_dropped,
+            },
+            "replay": {
+                "status": self.replay_status,
+                "speed": self.replay_speed,
+                "error": self.replay_error,
+            },
         }
 
 
@@ -145,8 +181,7 @@ class SessionManager:
 
         async with self._lock:
             active_count = sum(
-                session.state in ACTIVE_SESSION_STATES
-                for session in self._sessions.values()
+                session.state in ACTIVE_SESSION_STATES for session in self._sessions.values()
             )
             if active_count >= self._settings.max_concurrent_sessions:
                 raise SessionCapacityError("all simulator workers are currently in use")
@@ -170,14 +205,18 @@ class SessionManager:
                 flash_path=flash_path,
                 qmp_socket_path=qmp_socket_path,
                 gdb_socket_path=gdb_socket_path,
+                initial_flash_image=flash_image,
             )
             self._sessions[session_id] = session
 
         try:
+            session.generation_started_ns = time.monotonic_ns()
             await self._launch(session)
+            self._record_event(session, "lifecycle", "session.started", "service")
         except Exception:
             session.state = SessionState.FAILED
             shutil.rmtree(runtime_directory, ignore_errors=True)
+            self._clear_private_session_data(session)
             raise
         return session
 
@@ -189,33 +228,41 @@ class SessionManager:
 
     async def stop(self, session_id: str, *, expired: bool = False) -> SessionRecord:
         session = self.get(session_id)
-        await self._close_debugger(session)
-        process = session.process
-        if process and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=3)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
-        if session.reader_task and session.reader_task is not asyncio.current_task():
-            await asyncio.gather(session.reader_task, return_exceptions=True)
-        session.exit_code = process.returncode if process else session.exit_code
+        replay_task = session.replay_task
+        session.replay_task = None
+        if replay_task and replay_task is not asyncio.current_task():
+            replay_task.cancel()
+            await asyncio.gather(replay_task, return_exceptions=True)
+        await self._terminate_worker(session)
+        self._clear_private_session_data(session)
         session.state = SessionState.EXPIRED if expired else SessionState.STOPPED
+        self._record_event(
+            session,
+            "lifecycle",
+            "session.expired" if expired else "session.stopped",
+            "service",
+        )
         self._publish(session, None)
         shutil.rmtree(session.runtime_directory, ignore_errors=True)
         return session
 
     async def write_serial(self, session_id: str, payload: bytes) -> None:
         session = self.get(session_id)
+        self._require_live_input(session)
         process = session.process
         if session.state is not SessionState.RUNNING or not process or not process.stdin:
             raise RuntimeError("session serial input is not available")
         process.stdin.write(payload)
         await process.stdin.drain()
+        self._record_input(
+            session,
+            ReplayAction(self._offset_ms(session), "serial", payload),
+            serial_metadata(payload),
+        )
 
     async def send_key(self, session_id: str, key: str, pressed: bool) -> None:
         session = self.get(session_id)
+        self._require_live_input(session)
         if session.state is not SessionState.RUNNING:
             raise RuntimeError("session board input is not available")
         if not self._settings.worker_qmp_enabled:
@@ -224,6 +271,11 @@ class SessionManager:
         arguments = qmp_key_event(session.board, key, pressed)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "input-send-event", arguments)
+        self._record_input(
+            session,
+            ReplayAction(self._offset_ms(session), "key", (key, pressed)),
+            {"key": key, "pressed": pressed},
+        )
 
     async def send_button(self, session_id: str, button: str, pressed: bool) -> None:
         session = self.get(session_id)
@@ -231,6 +283,11 @@ class SessionManager:
         arguments = qmp_button_event(session.board, button, pressed)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+        self._record_input(
+            session,
+            ReplayAction(self._offset_ms(session), "button", (button, pressed)),
+            {"button": button, "pressed": pressed},
+        )
 
     async def set_imu_sample(
         self,
@@ -240,11 +297,21 @@ class SessionManager:
     ) -> None:
         session = self.get(session_id)
         self._require_board_input(session)
-        arguments = qmp_imu_sample(
-            session.board, acceleration_g, angular_velocity_dps
-        )
+        arguments = qmp_imu_sample(session.board, acceleration_g, angular_velocity_dps)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+        self._record_input(
+            session,
+            ReplayAction(
+                self._offset_ms(session),
+                "imu",
+                (acceleration_g, angular_velocity_dps),
+            ),
+            {
+                "acceleration_g": self._vector_dict(acceleration_g),
+                "angular_velocity_dps": self._vector_dict(angular_velocity_dps),
+            },
+        )
 
     async def set_power_state(
         self,
@@ -258,8 +325,22 @@ class SessionManager:
         arguments = qmp_power_state(session.board, battery_mv, vin_mv, charging)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+        self._record_input(
+            session,
+            ReplayAction(
+                self._offset_ms(session),
+                "power",
+                (battery_mv, vin_mv, charging),
+            ),
+            {"battery_mv": battery_mv, "vin_mv": vin_mv, "charging": charging},
+        )
+
+    def _require_live_input(self, session: SessionRecord) -> None:
+        if not session.accept_live_input:
+            raise RuntimeError("live input is disabled while a replay is running")
 
     def _require_board_input(self, session: SessionRecord) -> None:
+        self._require_live_input(session)
         if session.state is not SessionState.RUNNING:
             raise RuntimeError("session board input is not available")
         if not self._settings.worker_qmp_enabled:
@@ -267,6 +348,7 @@ class SessionManager:
 
     async def pause(self, session_id: str) -> SessionRecord:
         session = self.get(session_id)
+        self._require_live_input(session)
         if not self._settings.worker_qmp_enabled:
             raise QmpUnavailableError("QMP session control is disabled for this worker")
         async with session.qmp_lock:
@@ -274,6 +356,7 @@ class SessionManager:
                 raise SessionTransitionError(f"cannot pause session in {session.state} state")
             await execute_qmp(session.qmp_socket_path, "stop")
             session.state = SessionState.PAUSED
+        self._record_event(session, "control", "session.paused", "user")
         debug_run_task = session.debug_run_task
         if debug_run_task:
             try:
@@ -286,9 +369,7 @@ class SessionManager:
                 if session.gdb_client:
                     await session.gdb_client.close()
                     session.gdb_client = None
-                raise GdbRemoteError(
-                    "debugger did not acknowledge the paused worker"
-                ) from error
+                raise GdbRemoteError("debugger did not acknowledge the paused worker") from error
             if session.debug_stop_reason and session.debug_stop_reason.startswith(
                 "debugger-error:"
             ):
@@ -297,6 +378,7 @@ class SessionManager:
 
     async def resume(self, session_id: str) -> SessionRecord:
         session = self.get(session_id)
+        self._require_live_input(session)
         if not self._settings.worker_qmp_enabled:
             raise QmpUnavailableError("QMP session control is disabled for this worker")
         if session.state is not SessionState.PAUSED:
@@ -309,6 +391,7 @@ class SessionManager:
             async with session.qmp_lock:
                 await execute_qmp(session.qmp_socket_path, "cont")
                 session.state = SessionState.RUNNING
+        self._record_event(session, "control", "session.resumed", "user")
         return session
 
     async def refresh_state(self, session_id: str) -> SessionRecord:
@@ -361,10 +444,7 @@ class SessionManager:
         session = await self.refresh_state(session_id)
         if session.state is not SessionState.PAUSED:
             raise SessionTransitionError("debug operations require a paused session")
-        if not (
-            self._settings.worker_debug_enabled
-            and self._settings.worker_qmp_enabled
-        ):
+        if not (self._settings.worker_debug_enabled and self._settings.worker_qmp_enabled):
             raise GdbRemoteError("private GDB worker access is disabled")
         return session
 
@@ -404,13 +484,332 @@ class SessionManager:
 
     async def reset(self, session_id: str) -> SessionRecord:
         session = self.get(session_id)
+        self._require_live_input(session)
         if not self._settings.worker_qmp_enabled:
             raise QmpUnavailableError("QMP session control is disabled for this worker")
         async with session.qmp_lock:
             if session.state not in {SessionState.RUNNING, SessionState.PAUSED}:
                 raise SessionTransitionError(f"cannot reset session in {session.state} state")
             await execute_qmp(session.qmp_socket_path, "system_reset")
+        action = ReplayAction(self._offset_ms(session), "reset", None)
+        self._append_replay_action(session, action)
+        self._record_event(session, "control", "session.reset", "user")
         return session
+
+    def list_events(
+        self, session_id: str, *, after: int = 0, limit: int = 200
+    ) -> dict[str, object]:
+        session = self.get(session_id)
+        bounded_limit = min(max(limit, 1), self._settings.max_event_page_size)
+        events = [event for event in session.events if event.sequence > after][:bounded_limit]
+        first_sequence = session.events[0].sequence if session.events else None
+        return {
+            "session_id": session.id,
+            "generation": session.generation,
+            "events_dropped": session.events_dropped,
+            "cursor_truncated": bool(first_sequence is not None and after < first_sequence - 1),
+            "events": [event.public_dict() for event in events],
+            "next_after": events[-1].sequence if events else after,
+        }
+
+    def diagnostics(self, session_id: str) -> dict[str, object]:
+        session = self.get(session_id)
+        serial_tail = b"".join(session.serial_buffer)
+        return {
+            "schema": "esp32-s3-simulator-diagnostics/v1",
+            "privacy": {
+                "firmware_bytes_included": False,
+                "mutated_flash_included": False,
+                "framebuffer_pixels_included": False,
+                "debug_memory_included": False,
+                "serial_payloads_included": False,
+            },
+            "session": {
+                "id": session.id,
+                "board_id": session.board.id,
+                "state": session.state.value,
+                "created_at": session.created_at.isoformat(),
+                "expires_at": session.expires_at.isoformat(),
+                "exit_code": session.exit_code,
+                "generation": session.generation,
+                "firmware": asdict(session.firmware),
+                "replay": self._replay_dict(session),
+            },
+            "worker": {
+                "sandbox": self.worker_sandbox_mode,
+                "qmp_enabled": self._settings.worker_qmp_enabled,
+                "debug_enabled": self._settings.worker_debug_enabled,
+                "trace_enabled": self._settings.worker_trace_enabled,
+            },
+            "recording": {
+                "events_dropped": session.events_dropped,
+                "replayable_actions_dropped": session.replay_actions_dropped,
+                "trace_events_recorded": session.trace_events_recorded,
+                "trace_events_dropped": session.trace_events_dropped,
+                "events": [event.public_dict() for event in session.events],
+            },
+            "serial": {
+                "total_output_bytes": session.serial_output_bytes,
+                "buffered_tail": serial_metadata(serial_tail),
+            },
+        }
+
+    async def start_replay(self, session_id: str, speed: float) -> dict[str, object]:
+        session = self.get(session_id)
+        if session.state not in {SessionState.RUNNING, SessionState.PAUSED}:
+            raise SessionTransitionError(f"cannot replay session in {session.state} state")
+        if session.replay_task and not session.replay_task.done():
+            raise SessionTransitionError("a replay is already running")
+        if session.replay_actions_dropped:
+            raise SessionTransitionError(
+                "the replayable input recording exceeded its bound and is incomplete"
+            )
+        actions = tuple(session.replay_actions)
+        if not actions:
+            raise SessionTransitionError("the session has no replayable external input")
+        replay_duration = actions[-1].offset_ms / 1000 / speed
+        if replay_duration > self._settings.max_replay_duration_seconds:
+            raise SessionTransitionError(
+                "the requested replay duration exceeds the configured limit"
+            )
+        session.replay_status = "queued"
+        session.replay_speed = speed
+        session.replay_error = None
+        self._record_event(
+            session,
+            "replay",
+            "replay.queued",
+            "user",
+            {"action_count": len(actions), "speed": speed},
+        )
+        session.replay_task = asyncio.create_task(self._run_replay(session, actions, speed))
+        return self._replay_dict(session)
+
+    def replay_status(self, session_id: str) -> dict[str, object]:
+        return self._replay_dict(self.get(session_id))
+
+    async def _run_replay(
+        self,
+        session: SessionRecord,
+        actions: tuple[ReplayAction, ...],
+        speed: float,
+    ) -> None:
+        session.accept_live_input = False
+        session.replay_status = "running"
+        try:
+            await self._terminate_worker(session)
+            session.runtime_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            session.flash_path.write_bytes(session.initial_flash_image)
+            session.flash_path.chmod(0o600)
+            session.qmp_socket_path.unlink(missing_ok=True)
+            session.gdb_socket_path.unlink(missing_ok=True)
+            (session.runtime_directory / "framebuffer.ppm").unlink(missing_ok=True)
+            session.serial_buffer.clear()
+            session.serial_output_bytes = 0
+            session.debug_breakpoints.clear()
+            session.debug_stop_reason = None
+            session.exit_code = None
+            session.generation += 1
+            session.generation_started_ns = time.monotonic_ns()
+            session.replay_actions.clear()
+            session.replay_actions_dropped = 0
+            session.trace_events_recorded = 0
+            session.trace_events_dropped = 0
+            session.trace_event_counts.clear()
+            session.trace_truncation_reported = False
+            session.state = SessionState.STARTING
+            await self._launch(session)
+            self._record_event(
+                session,
+                "replay",
+                "replay.started",
+                "service",
+                {"action_count": len(actions), "speed": speed},
+            )
+
+            replay_started = time.monotonic()
+            for action in actions:
+                target = action.offset_ms / 1000 / speed
+                delay = target - (time.monotonic() - replay_started)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                replayed_action, public_data = await self._apply_replay_action(session, action)
+                self._append_replay_action(session, replayed_action)
+                event_category = "control" if action.type == "reset" else "input"
+                event_type = "session.reset" if action.type == "reset" else f"input.{action.type}"
+                self._record_event(
+                    session,
+                    event_category,
+                    event_type,
+                    "replay",
+                    public_data,
+                )
+
+            session.replay_status = "completed"
+            self._record_event(
+                session,
+                "replay",
+                "replay.completed",
+                "service",
+                {"action_count": len(actions), "speed": speed},
+            )
+        except asyncio.CancelledError:
+            session.replay_status = "cancelled"
+            session.replay_error = None
+            self._record_event(session, "replay", "replay.cancelled", "service")
+            raise
+        except Exception:
+            session.replay_status = "failed"
+            session.replay_error = "The worker could not complete the replay"
+            if session.state is SessionState.STARTING:
+                session.state = SessionState.FAILED
+                shutil.rmtree(session.runtime_directory, ignore_errors=True)
+                self._clear_private_session_data(session)
+            self._record_event(session, "replay", "replay.failed", "service")
+        finally:
+            session.accept_live_input = True
+            if session.replay_task is asyncio.current_task():
+                session.replay_task = None
+
+    async def _apply_replay_action(
+        self, session: SessionRecord, action: ReplayAction
+    ) -> tuple[ReplayAction, dict[str, object]]:
+        offset_ms = self._offset_ms(session)
+        if action.type == "serial":
+            payload = action.payload
+            if not isinstance(payload, bytes):
+                raise RuntimeError("recorded serial input is invalid")
+            process = session.process
+            if session.state is not SessionState.RUNNING or not process or not process.stdin:
+                raise RuntimeError("session serial input is not available")
+            process.stdin.write(payload)
+            await process.stdin.drain()
+            return ReplayAction(offset_ms, "serial", payload), serial_metadata(payload)
+        if action.type == "key":
+            key, pressed = action.payload  # type: ignore[misc]
+            arguments = qmp_key_event(session.board, key, pressed)
+            command = "input-send-event"
+            public_data = {"key": key, "pressed": pressed}
+        elif action.type == "button":
+            button, pressed = action.payload  # type: ignore[misc]
+            arguments = qmp_button_event(session.board, button, pressed)
+            command = "qom-set"
+            public_data = {"button": button, "pressed": pressed}
+        elif action.type == "imu":
+            acceleration_g, angular_velocity_dps = action.payload  # type: ignore[misc]
+            arguments = qmp_imu_sample(session.board, acceleration_g, angular_velocity_dps)
+            command = "qom-set"
+            public_data = {
+                "acceleration_g": self._vector_dict(acceleration_g),
+                "angular_velocity_dps": self._vector_dict(angular_velocity_dps),
+            }
+        elif action.type == "power":
+            battery_mv, vin_mv, charging = action.payload  # type: ignore[misc]
+            arguments = qmp_power_state(session.board, battery_mv, vin_mv, charging)
+            command = "qom-set"
+            public_data = {
+                "battery_mv": battery_mv,
+                "vin_mv": vin_mv,
+                "charging": charging,
+            }
+        else:
+            async with session.qmp_lock:
+                await execute_qmp(session.qmp_socket_path, "system_reset")
+            return ReplayAction(offset_ms, "reset", None), {}
+        async with session.qmp_lock:
+            await execute_qmp(session.qmp_socket_path, command, arguments)
+        return ReplayAction(offset_ms, action.type, action.payload), public_data
+
+    async def _terminate_worker(self, session: SessionRecord) -> None:
+        await self._close_debugger(session)
+        process = session.process
+        reader_task = session.reader_task
+        trace_reader_task = session.trace_reader_task
+        session.process = None
+        session.reader_task = None
+        session.trace_reader_task = None
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        if reader_task and reader_task is not asyncio.current_task():
+            await asyncio.gather(reader_task, return_exceptions=True)
+        if trace_reader_task and trace_reader_task is not asyncio.current_task():
+            await asyncio.gather(trace_reader_task, return_exceptions=True)
+        session.exit_code = process.returncode if process else session.exit_code
+
+    def _record_input(
+        self,
+        session: SessionRecord,
+        action: ReplayAction,
+        public_data: dict[str, object],
+    ) -> None:
+        self._append_replay_action(session, action)
+        self._record_event(
+            session,
+            "input",
+            f"input.{action.type}",
+            "user",
+            public_data,
+        )
+
+    @staticmethod
+    def _clear_private_session_data(session: SessionRecord) -> None:
+        session.initial_flash_image = b""
+        session.replay_actions.clear()
+        session.serial_buffer.clear()
+
+    def _append_replay_action(self, session: SessionRecord, action: ReplayAction) -> None:
+        if len(session.replay_actions) >= self._settings.max_recording_events:
+            session.replay_actions.popleft()
+            session.replay_actions_dropped += 1
+        session.replay_actions.append(action)
+
+    def _record_event(
+        self,
+        session: SessionRecord,
+        category: str,
+        event_type: str,
+        source: str,
+        data: dict[str, object] | None = None,
+    ) -> None:
+        event = SessionEvent(
+            sequence=session.next_event_sequence,
+            generation=session.generation,
+            offset_ms=self._offset_ms(session),
+            category=category,  # type: ignore[arg-type]
+            type=event_type,
+            source=source,  # type: ignore[arg-type]
+            data=data or {},
+        )
+        session.next_event_sequence += 1
+        if len(session.events) >= self._settings.max_recording_events:
+            session.events.popleft()
+            session.events_dropped += 1
+        session.events.append(event)
+
+    @staticmethod
+    def _offset_ms(session: SessionRecord) -> int:
+        return max(0, (time.monotonic_ns() - session.generation_started_ns) // 1_000_000)
+
+    @staticmethod
+    def _vector_dict(vector: tuple[float, float, float]) -> dict[str, float]:
+        return {"x": vector[0], "y": vector[1], "z": vector[2]}
+
+    @staticmethod
+    def _replay_dict(session: SessionRecord) -> dict[str, object]:
+        return {
+            "session_id": session.id,
+            "generation": session.generation,
+            "status": session.replay_status,
+            "speed": session.replay_speed,
+            "error": session.replay_error,
+            "action_count": len(session.replay_actions),
+            "actions_dropped": session.replay_actions_dropped,
+        }
 
     async def capture_framebuffer(self, session_id: str) -> RGBFrame:
         session = self.get(session_id)
@@ -473,17 +872,17 @@ class SessionManager:
             session.qmp_socket_path if self._settings.worker_qmp_enabled else None,
             (
                 session.gdb_socket_path
-                if self._settings.worker_debug_enabled
-                and self._settings.worker_qmp_enabled
+                if self._settings.worker_debug_enabled and self._settings.worker_qmp_enabled
                 else None
             ),
+            trace_enabled=self._settings.worker_trace_enabled,
         )
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=session.runtime_directory,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stderr=asyncio.subprocess.PIPE,
             env={"LANG": "C.UTF-8", "PATH": "/usr/bin:/bin"},
             start_new_session=True,
             preexec_fn=lambda: _limit_worker_resources(
@@ -493,20 +892,85 @@ class SessionManager:
         )
         session.process = process
         session.state = SessionState.RUNNING
-        session.reader_task = asyncio.create_task(self._read_serial(session))
+        session.reader_task = asyncio.create_task(self._read_serial(session, process))
+        if process.stderr:
+            session.trace_reader_task = asyncio.create_task(
+                self._read_worker_trace(session, process.stderr)
+            )
 
-    async def _read_serial(self, session: SessionRecord) -> None:
-        process = session.process
-        if not process or not process.stdout:
+    async def _read_worker_trace(
+        self, session: SessionRecord, stream: asyncio.StreamReader
+    ) -> None:
+        while line := await stream.readline():
+            parsed = parse_worker_trace_line(line)
+            if parsed is None:
+                continue
+            event_type, data = parsed
+            trace_event = str(data["trace_event"])
+            trace_event_count = session.trace_event_counts.get(trace_event, 0) + 1
+            session.trace_event_counts[trace_event] = trace_event_count
+            trace_event_limit = TRACE_EVENT_LIMITS[trace_event]
+            if trace_event_count > trace_event_limit:
+                if trace_event_count == trace_event_limit + 1:
+                    self._record_event(
+                        session,
+                        "peripheral",
+                        "peripheral.trace.sampled",
+                        "worker",
+                        {
+                            "trace_event": trace_event,
+                            "limit": trace_event_limit,
+                        },
+                    )
+                session.trace_events_dropped += 1
+                continue
+            if session.trace_events_recorded >= self._settings.max_trace_events_per_generation:
+                if not session.trace_truncation_reported:
+                    self._record_event(
+                        session,
+                        "peripheral",
+                        "peripheral.trace.truncated",
+                        "worker",
+                        {
+                            "limit": self._settings.max_trace_events_per_generation,
+                        },
+                    )
+                    session.trace_truncation_reported = True
+                session.trace_events_dropped += 1
+                continue
+            session.trace_events_recorded += 1
+            self._record_event(session, "peripheral", event_type, "worker", data)
+
+    async def _read_serial(
+        self, session: SessionRecord, process: asyncio.subprocess.Process
+    ) -> None:
+        if not process.stdout:
             return
         while chunk := await process.stdout.read(4096):
-            session.serial_buffer.append(chunk)
-            self._publish(session, chunk)
-        session.exit_code = await process.wait()
+            if session.process is process:
+                session.serial_output_bytes += len(chunk)
+                session.serial_buffer.append(chunk)
+                self._publish(session, chunk)
+        exit_code = await process.wait()
+        if session.process is not process:
+            return
+        trace_reader_task = session.trace_reader_task
+        session.trace_reader_task = None
+        if trace_reader_task and trace_reader_task is not asyncio.current_task():
+            await asyncio.gather(trace_reader_task, return_exceptions=True)
+        session.exit_code = exit_code
         await self._close_debugger(session)
         if session.state in {SessionState.RUNNING, SessionState.PAUSED}:
             session.state = SessionState.STOPPED if session.exit_code == 0 else SessionState.FAILED
+        self._record_event(
+            session,
+            "lifecycle",
+            "worker.exited",
+            "worker",
+            {"exit_code": session.exit_code},
+        )
         self._publish(session, None)
+        self._clear_private_session_data(session)
         shutil.rmtree(session.runtime_directory, ignore_errors=True)
 
     @staticmethod
@@ -525,8 +989,7 @@ class SessionManager:
                 expired_ids = [
                     session.id
                     for session in self._sessions.values()
-                    if session.state in ACTIVE_SESSION_STATES
-                    and session.expires_at <= now
+                    if session.state in ACTIVE_SESSION_STATES and session.expires_at <= now
                 ]
                 for session_id in expired_ids:
                     await self.stop(session_id, expired=True)

@@ -51,6 +51,50 @@ export interface SimulationSession {
   expires_at: string;
   exit_code: number | null;
   firmware: FirmwareMetadata;
+  generation: number;
+  recording: RecordingSummary;
+  replay: ReplaySummary;
+}
+
+export interface RecordingSummary {
+  event_count: number;
+  events_dropped: number;
+  replayable_action_count: number;
+  replayable_actions_dropped: number;
+  trace_events_recorded: number;
+  trace_events_dropped: number;
+}
+
+export interface ReplaySummary {
+  status: "idle" | "queued" | "running" | "completed" | "failed" | "cancelled";
+  speed: number | null;
+  error: string | null;
+}
+
+export interface ReplayStatus extends ReplaySummary {
+  session_id: string;
+  generation: number;
+  action_count: number;
+  actions_dropped: number;
+}
+
+export interface SessionEvent {
+  sequence: number;
+  generation: number;
+  offset_ms: number;
+  category: "lifecycle" | "control" | "input" | "debug" | "replay" | "peripheral";
+  type: string;
+  source: "service" | "user" | "replay" | "worker";
+  data: Record<string, unknown>;
+}
+
+export interface SessionEventPage {
+  session_id: string;
+  generation: number;
+  events_dropped: number;
+  cursor_truncated: boolean;
+  events: SessionEvent[];
+  next_after: number;
 }
 
 export interface DebugCapabilities {

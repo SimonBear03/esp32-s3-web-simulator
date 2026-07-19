@@ -13,6 +13,7 @@ from esp32_s3_simulator.api import (
     KeyInputMessage,
     PowerInputMessage,
     SessionControlMessage,
+    SessionReplayMessage,
     create_app,
 )
 from esp32_s3_simulator.sessions import SessionState
@@ -81,6 +82,7 @@ def test_input_message_contract_rejects_untyped_payloads() -> None:
         PowerInputMessage,
     )
     assert SessionControlMessage.model_validate({"action": "pause"}).action == "pause"
+    assert SessionReplayMessage.model_validate({}).speed == 1.0
     assert (
         DebugMemoryReadMessage.model_validate({"address": 0x42000000, "length": 4096}).length
         == 4096
@@ -126,6 +128,61 @@ async def test_session_control_contract_rejects_invalid_or_missing_sessions(
 
     assert invalid.status_code == 422
     assert missing.status_code == 404
+
+
+async def test_recording_diagnostics_and_replay_api_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_app(disabled_settings(tmp_path))
+    manager = app.state.session_manager
+
+    def list_events(session_id: str, *, after: int, limit: int) -> dict[str, object]:
+        assert (session_id, after, limit) == ("session-id", 7, 12)
+        return {"events": [], "next_after": 7}
+
+    def diagnostics(session_id: str) -> dict[str, object]:
+        assert session_id == "session-id"
+        return {
+            "schema": "esp32-s3-simulator-diagnostics/v1",
+            "privacy": {"firmware_bytes_included": False},
+        }
+
+    def replay_status(session_id: str) -> dict[str, object]:
+        assert session_id == "session-id"
+        return {"status": "completed"}
+
+    async def start_replay(session_id: str, speed: float) -> dict[str, object]:
+        assert (session_id, speed) == ("session-id", 2.0)
+        return {"status": "queued", "speed": speed}
+
+    monkeypatch.setattr(manager, "list_events", list_events)
+    monkeypatch.setattr(manager, "diagnostics", diagnostics)
+    monkeypatch.setattr(manager, "replay_status", replay_status)
+    monkeypatch.setattr(manager, "start_replay", start_replay)
+
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://simulator.test"
+        ) as client,
+    ):
+        events = await client.get("/v1/sessions/session-id/events?after=7&limit=12")
+        bundle = await client.get("/v1/sessions/session-id/diagnostics")
+        status = await client.get("/v1/sessions/session-id/replay")
+        replay = await client.post(
+            "/v1/sessions/session-id/replay", json={"speed": 2}
+        )
+        invalid = await client.post(
+            "/v1/sessions/session-id/replay", json={"speed": 5}
+        )
+
+    assert events.json() == {"events": [], "next_after": 7}
+    assert bundle.headers["content-disposition"].endswith('session-id.json"')
+    assert bundle.headers["cache-control"] == "no-store"
+    assert status.json() == {"status": "completed"}
+    assert replay.status_code == 202
+    assert replay.json() == {"status": "queued", "speed": 2.0}
+    assert invalid.status_code == 422
 
 
 async def test_debug_api_is_typed_bounded_and_does_not_expose_raw_gdb(

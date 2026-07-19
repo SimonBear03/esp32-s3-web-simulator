@@ -65,6 +65,31 @@ async def wait_for_text(
     raise TimeoutError(f"timed out waiting for {expected!r}\n{serial_text(session)}")
 
 
+async def wait_for_trace_types(
+    session: SessionRecord, expected: set[str], *, timeout: float = 8
+) -> set[str]:
+    deadline = asyncio.get_running_loop().time() + timeout
+    observed: set[str] = set()
+    while asyncio.get_running_loop().time() < deadline:
+        observed = {
+            event.type
+            for event in session.events
+            if event.generation == session.generation and event.category == "peripheral"
+        }
+        if expected <= observed:
+            return observed
+        if session.state is not SessionState.RUNNING:
+            raise RuntimeError(
+                "worker stopped before the expected peripheral traces appeared; "
+                f"missing={sorted(expected - observed)} state={session.state}"
+            )
+        await asyncio.sleep(0.05)
+    raise TimeoutError(
+        "timed out waiting for peripheral traces; "
+        f"missing={sorted(expected - observed)} observed={sorted(observed)}"
+    )
+
+
 async def run(args: argparse.Namespace) -> None:
     board = get_board_profile(args.board_id)
     with tempfile.TemporaryDirectory(prefix="esp32-base-conformance-") as runtime_root:
@@ -97,34 +122,19 @@ async def run(args: argparse.Namespace) -> None:
                     session,
                     "SIM:LEDC channel=7 pin=38 frequency=256 duty=110 configured=1",
                 )
-                await wait_for_text(
-                    session, "SIM:BMI270 address=0x68 chip_id=0x24 ready=1"
-                )
-                await wait_for_text(
-                    session, "SIM:BATTERY_ADC gpio=10 unit=1 channel=9 ratio=2.0"
-                )
-                await wait_for_text(
-                    session, "SIM:IMU_RAW ax=0 ay=0 az=4096 gx=0 gy=0 gz=0"
-                )
+                await wait_for_text(session, "SIM:BMI270 address=0x68 chip_id=0x24 ready=1")
+                await wait_for_text(session, "SIM:BATTERY_ADC gpio=10 unit=1 channel=9 ratio=2.0")
+                await wait_for_text(session, "SIM:IMU_RAW ax=0 ay=0 az=4096 gx=0 gy=0 gz=0")
                 await wait_for_text(
                     session,
-                    "SIM:POWER battery_mv=3898 adc_raw=2107 "
-                    "source=adc charging=unavailable",
+                    "SIM:POWER battery_mv=3898 adc_raw=2107 source=adc charging=unavailable",
                 )
             else:
                 await wait_for_text(session, "SIM:PSRAM bytes=8388608 test=pass")
-                await wait_for_text(
-                    session, "SIM:BUTTONS a_gpio=11 b_gpio=12 active=low"
-                )
-                await wait_for_text(
-                    session, "SIM:BMI270 address=0x68 chip_id=0x24 ready=1"
-                )
-                await wait_for_text(
-                    session, "SIM:M5PM1 address=0x6e device_id=0x51 ready=1"
-                )
-                await wait_for_text(
-                    session, "SIM:IMU_RAW ax=0 ay=0 az=4096 gx=0 gy=0 gz=0"
-                )
+                await wait_for_text(session, "SIM:BUTTONS a_gpio=11 b_gpio=12 active=low")
+                await wait_for_text(session, "SIM:BMI270 address=0x68 chip_id=0x24 ready=1")
+                await wait_for_text(session, "SIM:M5PM1 address=0x6e device_id=0x51 ready=1")
+                await wait_for_text(session, "SIM:IMU_RAW ax=0 ay=0 az=4096 gx=0 gy=0 gz=0")
                 await wait_for_text(
                     session,
                     "SIM:POWER battery_mv=3900 vin_mv=5000 source=0 charging=1",
@@ -135,11 +145,20 @@ async def run(args: argparse.Namespace) -> None:
                 f"height={board.display.height} pattern=red-blue",
             )
             await wait_for_text(session, f"SIM:BOOT version=1 profile={board.id}")
-            await wait_for_text(
-                session, "SIM:NVS boot_count=1 write_bytes=4 readback=1"
-            )
+            await wait_for_text(session, "SIM:NVS boot_count=1 write_bytes=4 readback=1")
             await wait_for_text(session, "SIM:READY")
             await wait_for_text(session, "SIM:HEARTBEAT", count=3)
+            expected_trace_types = {
+                "peripheral.display.command",
+                "peripheral.display.window",
+                "peripheral.gpio.output",
+                "peripheral.i2c.event",
+                "peripheral.spi.transaction",
+            }
+            if board.id == "cardputer-adv":
+                expected_trace_types.add("peripheral.adc.conversion")
+            observed_trace_types = await wait_for_trace_types(session, expected_trace_types)
+            print("SIM:TRACE generation=1 types=" + ",".join(sorted(observed_trace_types)))
 
             if args.qmp:
                 await manager.pause(session.id)
@@ -187,9 +206,7 @@ async def run(args: argparse.Namespace) -> None:
                 await manager.resume(session.id)
                 if session.state is not SessionState.RUNNING:
                     raise RuntimeError("session did not return to running state")
-                await wait_for_text(
-                    session, "SIM:HEARTBEAT", count=paused_heartbeat_count + 1
-                )
+                await wait_for_text(session, "SIM:HEARTBEAT", count=paused_heartbeat_count + 1)
 
                 if board.id == "cardputer-adv":
                     navigation_keys = (
@@ -201,12 +218,11 @@ async def run(args: argparse.Namespace) -> None:
                     )
                     for key, raw_code in navigation_keys:
                         await manager.send_key(session.id, key, True)
+                        await asyncio.sleep(0.05)
                         await manager.send_key(session.id, key, False)
                         await wait_for_text(session, f"SIM:KEY raw=0x{raw_code | 0x80:02x}")
                         await wait_for_text(session, f"SIM:KEY raw=0x{raw_code:02x}")
-                    await manager.set_imu_sample(
-                        session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0)
-                    )
+                    await manager.set_imu_sample(session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0))
                     await wait_for_text(
                         session,
                         "SIM:IMU_RAW ax=4096 ay=0 az=0 gx=0 gy=0 gz=4096",
@@ -216,8 +232,7 @@ async def run(args: argparse.Namespace) -> None:
                     )
                     await wait_for_text(
                         session,
-                        "SIM:POWER battery_mv=3704 adc_raw=2001 "
-                        "source=adc charging=unavailable",
+                        "SIM:POWER battery_mv=3704 adc_raw=2001 source=adc charging=unavailable",
                     )
                 else:
                     await manager.send_button(session.id, "a", True)
@@ -229,9 +244,7 @@ async def run(args: argparse.Namespace) -> None:
                     await manager.send_button(session.id, "b", False)
                     await wait_for_text(session, "SIM:BUTTON id=b pressed=0")
 
-                    await manager.set_imu_sample(
-                        session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0)
-                    )
+                    await manager.set_imu_sample(session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0))
                     await wait_for_text(
                         session,
                         "SIM:IMU_RAW ax=4096 ay=0 az=0 gx=0 gy=0 gz=4096",
@@ -243,6 +256,20 @@ async def run(args: argparse.Namespace) -> None:
                         session,
                         "SIM:POWER battery_mv=3700 vin_mv=0 source=2 charging=0",
                     )
+
+                expected_trace_types.update(
+                    {
+                        "peripheral.imu.sample",
+                        "peripheral.keyboard.event",
+                    }
+                    if board.id == "cardputer-adv"
+                    else {
+                        "peripheral.button",
+                        "peripheral.imu.sample",
+                        "peripheral.power.state",
+                    }
+                )
+                await wait_for_trace_types(session, expected_trace_types)
 
             await manager.write_serial(session.id, b"ping\n")
             await wait_for_text(session, "SIM:PONG")
@@ -257,9 +284,7 @@ async def run(args: argparse.Namespace) -> None:
                     f"SIM:NVS boot_count={expected_boot_count} "
                     f"write_bytes=4 readback={expected_boot_count}",
                 )
-                await wait_for_text(
-                    session, "SIM:HEARTBEAT", count=heartbeat_count + 1
-                )
+                await wait_for_text(session, "SIM:HEARTBEAT", count=heartbeat_count + 1)
 
             heartbeat_count = serial_text(session).count("SIM:HEARTBEAT")
             await manager.write_serial(session.id, b"reset\n")
@@ -269,9 +294,50 @@ async def run(args: argparse.Namespace) -> None:
                 f"SIM:NVS boot_count={expected_boot_count} "
                 f"write_bytes=4 readback={expected_boot_count}",
             )
-            await wait_for_text(
-                session, "SIM:HEARTBEAT", count=heartbeat_count + 1
-            )
+            await wait_for_text(session, "SIM:HEARTBEAT", count=heartbeat_count + 1)
+
+            if args.qmp:
+                original_generation = session.generation
+                original_action_count = len(session.replay_actions)
+                if original_action_count == 0:
+                    raise RuntimeError("conformance run did not record replayable input")
+                queued = await manager.start_replay(session.id, 1.0)
+                replay_task = session.replay_task
+                if queued["status"] != "queued" or replay_task is None:
+                    raise RuntimeError("replay did not enter its queued state")
+                await replay_task
+                if session.replay_status != "completed":
+                    raise RuntimeError(
+                        f"replay ended in {session.replay_status}: {session.replay_error}"
+                    )
+                if session.generation != original_generation + 1:
+                    raise RuntimeError("replay did not start a new worker generation")
+                replay_output = await wait_for_text(
+                    session,
+                    f"SIM:NVS boot_count={expected_boot_count} "
+                    f"write_bytes=4 readback={expected_boot_count}",
+                )
+                await wait_for_trace_types(session, expected_trace_types)
+                replayed_inputs = sum(
+                    event.generation == session.generation
+                    and event.source == "replay"
+                    and event.type.startswith(("input.", "session.reset"))
+                    for event in session.events
+                )
+                if replayed_inputs != original_action_count:
+                    raise RuntimeError(
+                        "replay event count did not match the recorded external inputs; "
+                        f"expected={original_action_count} observed={replayed_inputs}"
+                    )
+                if "replay.completed" not in {
+                    event.type for event in session.events if event.generation == session.generation
+                }:
+                    raise RuntimeError("replay completion was not recorded")
+                print(
+                    f"SIM:REPLAY generation={session.generation} "
+                    f"actions={original_action_count} status=completed"
+                )
+                output = replay_output
 
             print(output)
             print("BASE CONFORMANCE PASSED")

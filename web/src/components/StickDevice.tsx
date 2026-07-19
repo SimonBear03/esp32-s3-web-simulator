@@ -6,12 +6,14 @@ import { DisplayCanvas } from "./DisplayCanvas";
 
 interface StickDeviceProps {
   sessionId: string | null;
+  streamGeneration: number;
   inputEnabled: boolean;
   onButton: (button: "a" | "b", pressed: boolean) => void;
 }
 
 export function StickDevice({
   sessionId,
+  streamGeneration,
   inputEnabled,
   onButton,
 }: StickDeviceProps) {
@@ -35,6 +37,7 @@ export function StickDevice({
           boardLabel="StickS3 compatible"
           height={240}
           sessionId={sessionId}
+          streamGeneration={streamGeneration}
           width={135}
         />
       </div>

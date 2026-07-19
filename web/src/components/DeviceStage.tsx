@@ -10,6 +10,7 @@ import { StickDevice } from "./StickDevice";
 interface DeviceStageProps {
   boardId: BoardId;
   sessionId: string | null;
+  streamGeneration: number;
   inputEnabled: boolean;
   onKey: (key: string, pressed: boolean) => void;
   onButton: (button: "a" | "b", pressed: boolean) => void;
@@ -18,6 +19,7 @@ interface DeviceStageProps {
 export function DeviceStage({
   boardId,
   sessionId,
+  streamGeneration,
   inputEnabled,
   onKey,
   onButton,
@@ -48,12 +50,14 @@ export function DeviceStage({
               inputEnabled={inputEnabled}
               onKey={onKey}
               sessionId={sessionId}
+              streamGeneration={streamGeneration}
             />
           ) : (
             <StickDevice
               inputEnabled={inputEnabled}
               onButton={onButton}
               sessionId={sessionId}
+              streamGeneration={streamGeneration}
             />
           )}
         </div>

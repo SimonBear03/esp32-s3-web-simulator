@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000010 Mon Sep 17 00:00:00 2001
+From: ESP32-S3 Web Simulator contributors <noreply@example.com>
+Date: Sun, 19 Jul 2026 21:00:00 +0800
+Subject: [PATCH 10/11] esp32s3: add peripheral trace points
+
+Add worker-originated trace points at the behavioral boundaries used by
+the simulator diagnostics service: ESP32-S3 GPIO input/output, GPSPI
+transactions, ST7789 commands and windows, board input, injected IMU and
+power state, and SAR ADC conversion. Existing QEMU I2C core trace points
+cover addressed I2C transfers without duplicating bus instrumentation.
+---
+ hw/adc/esp32s3_saradc.c     |  4 ++++
+ hw/adc/trace-events         |  3 +++
+ hw/display/st7789.c         |  2 ++
+ hw/display/trace-events     |  4 ++++
+ hw/gpio/esp32_gpio.c        | 10 ++++++++--
+ hw/gpio/trace-events        |  4 ++++
+ hw/input/sticks3_buttons.c  |  2 ++
+ hw/input/tca8418.c          |  2 ++
+ hw/input/trace-events       |  4 ++++
+ hw/misc/m5pm1.c             |  2 ++
+ hw/misc/trace-events        |  2 ++
+ hw/sensor/bmi270.c          |  4 ++++
+ hw/sensor/trace-events      |  3 +++
+ hw/ssi/esp32s3_gpspi.c      |  4 ++++
+ hw/ssi/trace-events         |  3 +++
+ 15 files changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/hw/ssi/esp32s3_gpspi.c b/hw/ssi/esp32s3_gpspi.c
+--- a/hw/ssi/esp32s3_gpspi.c
++++ b/hw/ssi/esp32s3_gpspi.c
+@@ -13,6 +13,7 @@
+ #include "migration/vmstate.h"
+ #include "qemu/log.h"
+ #include "qemu/module.h"
++#include "trace.h"
+ 
+ #define GPSPI_CMD 0x000
+ #define GPSPI_ADDR 0x004
+@@ -78,6 +79,9 @@ static void esp32s3_gpspi_transaction(ESP32S3GpspiState *s)
+     uint8_t *data = (uint8_t *)s->data;
+ 
+     data_bytes = MIN(data_bytes, sizeof(s->data));
++    trace_esp32s3_gpspi_transaction(
++        s->user, s->user2 & 0xffff, s->addr, data_bytes,
++        !!(s->misc & GPSPI_MISC_CS_KEEP_ACTIVE));
+     esp32s3_gpspi_set_cs(s, false);
+ 
+     if (s->user & GPSPI_USER_COMMAND) {
+diff --git a/hw/ssi/trace-events b/hw/ssi/trace-events
+--- a/hw/ssi/trace-events
++++ b/hw/ssi/trace-events
+@@ -63,3 +63,6 @@ allwinner_a10_spi_tx(uint8_t byte) "write 0x%02x"
+ allwinner_a10_spi_rx(uint8_t byte) "read 0x%02x"
+ allwinner_a10_spi_read(const char* regname, uint32_t value) "reg[%s] => 0x%08x"
+ allwinner_a10_spi_write(const char* regname, uint32_t value) "reg[%s] <= 0x%08x"
++
++# esp32s3_gpspi.c
++esp32s3_gpspi_transaction(uint32_t user, uint16_t command, uint32_t address, unsigned int data_bytes, bool keep_cs) "user=0x%08x command=0x%04x address=0x%08x data_bytes=%u keep_cs=%d"
+diff --git a/hw/display/st7789.c b/hw/display/st7789.c
+--- a/hw/display/st7789.c
++++ b/hw/display/st7789.c
+@@ -12,6 +12,7 @@
+ #include "hw/ssi/ssi.h"
+ #include "migration/vmstate.h"
+ #include "qemu/module.h"
++#include "trace.h"
+ #include "ui/console.h"
+ #include "ui/pixel_ops.h"
+ 
+@@ -132,6 +133,7 @@ static void st7789_apply_parameters(ST7789State *s)
+         s->row = s->row_start = MIN(start, ST7789_GRAM_HEIGHT - 1);
+         s->row_end = MIN(end, ST7789_GRAM_HEIGHT - 1);
+     }
++    trace_st7789_window(s->command, start, end);
+ }
+ 
+ static void st7789_write_data(ST7789State *s, uint8_t value)
+@@ -162,6 +164,7 @@ static void st7789_write_data(ST7789State *s, uint8_t value)
+ 
+ static void st7789_write_command(ST7789State *s, uint8_t command)
+ {
++    trace_st7789_command(command);
+     s->command = command;
+     s->parameter_index = 0;
+     s->have_pixel_high = false;
+diff --git a/hw/display/trace-events b/hw/display/trace-events
+--- a/hw/display/trace-events
++++ b/hw/display/trace-events
+@@ -194,3 +194,7 @@ dm163_selbk(unsigned new_state) "selbk : %u"
+ dm163_leds(int led, uint32_t value) "led %d: 0x%x"
+ dm163_channels(int channel, uint8_t value) "channel %d: 0x%x"
+ dm163_refresh_rate(uint32_t rr) "refresh rate %d"
++
++# st7789.c
++st7789_command(uint8_t command) "command=0x%02x"
++st7789_window(uint8_t command, uint16_t start, uint16_t end) "command=0x%02x start=%u end=%u"
+diff --git a/hw/gpio/esp32_gpio.c b/hw/gpio/esp32_gpio.c
+--- a/hw/gpio/esp32_gpio.c
++++ b/hw/gpio/esp32_gpio.c
+@@ -18,6 +18,7 @@
+ #include "hw/irq.h"
+ #include "hw/qdev-properties.h"
+ #include "hw/gpio/esp32_gpio.h"
++#include "trace.h"
+ 
+ #define S3_GPIO_OUT 0x04
+ #define S3_GPIO_OUT_W1TS 0x08
+@@ -90,8 +91,10 @@ static void esp32_gpio_update_outputs(Esp32GpioState *s, uint64_t changed,
+          * when the software output-enable bit is clear.
+          */
+         if (enabled || matrix_write) {
+-            qemu_set_irq(s->pin_out[pin],
+-                         !!(s->output_level & BIT_ULL(pin)));
++            bool level = !!(s->output_level & BIT_ULL(pin));
++
++            trace_esp32_gpio_output(pin, level, matrix_write);
++            qemu_set_irq(s->pin_out[pin], level);
+         }
+         changed &= ~BIT_ULL(pin);
+     }
+@@ -161,6 +164,9 @@ static void esp32_gpio_set_input(void *opaque, int pin, int level)
+     if (triggered) {
+         s->interrupt_status |= mask;
+     }
++    if (previous != !!level) {
++        trace_esp32_gpio_input(pin, level, triggered);
++    }
+     esp32_gpio_update_irq(s);
+ }
+ 
+diff --git a/hw/gpio/trace-events b/hw/gpio/trace-events
+--- a/hw/gpio/trace-events
++++ b/hw/gpio/trace-events
+@@ -41,3 +41,7 @@ stm32l4x5_gpio_read(char *gpio, uint64_t addr) "GPIO%s addr: 0x%" PRIx64 " "
+ stm32l4x5_gpio_write(char *gpio, uint64_t addr, uint64_t data) "GPIO%s addr: 0x%" PRIx64 " val: 0x%" PRIx64 ""
+ stm32l4x5_gpio_update_idr(char *gpio, uint32_t old_idr, uint32_t new_idr) "GPIO%s from: 0x%x to: 0x%x"
+ stm32l4x5_gpio_pins(char *gpio, uint16_t disconnected, uint16_t high) "GPIO%s disconnected pins: 0x%x levels: 0x%x"
++
++# esp32_gpio.c
++esp32_gpio_input(unsigned int pin, bool level, bool triggered) "pin=%u level=%d interrupt=%d"
++esp32_gpio_output(unsigned int pin, bool level, bool matrix_write) "pin=%u level=%d matrix=%d"
+diff --git a/hw/input/tca8418.c b/hw/input/tca8418.c
+--- a/hw/input/tca8418.c
++++ b/hw/input/tca8418.c
+@@ -12,6 +12,7 @@
+ #include "hw/irq.h"
+ #include "migration/vmstate.h"
+ #include "qemu/module.h"
++#include "trace.h"
+ #include "ui/console.h"
+ 
+ #define TCA8418_REGISTER_COUNT 0x2f
+@@ -191,6 +192,7 @@ static void tca8418_input_event(DeviceState *dev, QemuConsole *src,
+ 
+     s->pressed[code] = key->down;
+     tca8418_push_event(s, code | (key->down ? 0x80 : 0));
++    trace_tca8418_key_event(code, key->down, s->fifo_count);
+ }
+ 
+ static const QemuInputHandler tca8418_input_handler = {
+diff --git a/hw/input/sticks3_buttons.c b/hw/input/sticks3_buttons.c
+--- a/hw/input/sticks3_buttons.c
++++ b/hw/input/sticks3_buttons.c
+@@ -12,6 +12,7 @@
+ #include "migration/vmstate.h"
+ #include "qapi/error.h"
+ #include "qemu/module.h"
++#include "trace.h"
+ #include "ui/console.h"
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(StickS3ButtonsState, STICKS3_BUTTONS)
+@@ -49,6 +50,7 @@ static void sticks3_buttons_set_pressed(StickS3ButtonsState *s, int button,
+         return;
+     }
+     s->pressed[button] = pressed;
++    trace_sticks3_button(button, pressed);
+     qemu_set_irq(s->outputs[button], !pressed);
+ }
+ 
+diff --git a/hw/input/trace-events b/hw/input/trace-events
+--- a/hw/input/trace-events
++++ b/hw/input/trace-events
+@@ -53,3 +53,7 @@ virtio_input_queue_full(void) "queue full"
+ lasips2_reg_read(unsigned int size, int id, uint64_t addr, const char *name, uint64_t val) "%u %d addr 0x%"PRIx64 "%s -> 0x%"PRIx64
+ lasips2_reg_write(unsigned int size, int id, uint64_t addr, const char *name, uint64_t val) "%u %d addr 0x%"PRIx64 "%s <- 0x%"PRIx64
+ lasips2_intr(unsigned int val) "%d"
++
++# tca8418.c, sticks3_buttons.c
++tca8418_key_event(uint8_t code, bool pressed, uint8_t fifo_count) "code=%u pressed=%d fifo_count=%u"
++sticks3_button(int button, bool pressed) "button=%d pressed=%d"
+diff --git a/hw/sensor/bmi270.c b/hw/sensor/bmi270.c
+--- a/hw/sensor/bmi270.c
++++ b/hw/sensor/bmi270.c
+@@ -15,6 +15,7 @@
+ #include "migration/vmstate.h"
+ #include "qapi/error.h"
+ #include "qemu/module.h"
++#include "trace.h"
+ 
+ #define BMI270_REGISTER_COUNT 0x80
+ 
+@@ -127,6 +128,9 @@ static void bmi270_set_sample(Object *obj, const char *value, Error **errp)
+         s->gyro_mdps[axis] = gyro[axis];
+     }
+     bmi270_update_sample_registers(s);
++    trace_bmi270_sample(
++        s->accel_mg[0], s->accel_mg[1], s->accel_mg[2],
++        s->gyro_mdps[0], s->gyro_mdps[1], s->gyro_mdps[2]);
+ }
+ 
+ static void bmi270_reset_registers(BMI270State *s)
+diff --git a/hw/sensor/trace-events b/hw/sensor/trace-events
+--- a/hw/sensor/trace-events
++++ b/hw/sensor/trace-events
+@@ -4,3 +4,6 @@
+ tmp105_read(uint8_t dev, uint8_t addr) "device: 0x%02x, addr: 0x%02x"
+ tmp105_write(uint8_t dev, uint8_t addr) "device: 0x%02x, addr 0x%02x"
+ tmp105_write_shutdown(uint8_t dev) "device: 0x%02x"
++
++# bmi270.c
++bmi270_sample(int32_t ax_mg, int32_t ay_mg, int32_t az_mg, int32_t gx_mdps, int32_t gy_mdps, int32_t gz_mdps) "accel_mg=%d,%d,%d gyro_mdps=%d,%d,%d"
+diff --git a/hw/misc/m5pm1.c b/hw/misc/m5pm1.c
+--- a/hw/misc/m5pm1.c
++++ b/hw/misc/m5pm1.c
+@@ -15,6 +15,7 @@
+ #include "migration/vmstate.h"
+ #include "qapi/error.h"
+ #include "qemu/module.h"
++#include "trace.h"
+ 
+ #define M5PM1_REGISTER_COUNT 0x80
+ 
+@@ -89,6 +90,7 @@ static void m5pm1_set_power_state(Object *obj, const char *value, Error **errp)
+     s->vin_mv = vin_mv;
+     s->charging = charging;
+     m5pm1_update_state_registers(s);
++    trace_m5pm1_power_state(s->battery_mv, s->vin_mv, s->charging);
+ }
+ 
+ static bool m5pm1_read_only_register(uint8_t reg)
+diff --git a/hw/misc/trace-events b/hw/misc/trace-events
+--- a/hw/misc/trace-events
++++ b/hw/misc/trace-events
+@@ -368,3 +368,5 @@
+ aspeed_sliio_write(uint64_t offset, unsigned int size, uint32_t data) "To 0x%" PRIx64 " of size %u: 0x%" PRIx32
+ aspeed_sliio_read(uint64_t offset, unsigned int size, uint32_t data) "To 0x%" PRIx64 " of size %u: 0x%" PRIx32
+ 
++# m5pm1.c
++m5pm1_power_state(uint16_t battery_mv, uint16_t vin_mv, bool charging) "battery_mv=%u vin_mv=%u charging=%d"
+diff --git a/hw/adc/esp32s3_saradc.c b/hw/adc/esp32s3_saradc.c
+--- a/hw/adc/esp32s3_saradc.c
++++ b/hw/adc/esp32s3_saradc.c
+@@ -17,6 +17,7 @@
+ #include "migration/vmstate.h"
+ #include "qemu/module.h"
+ #include "qemu/units.h"
++#include "trace.h"
+ 
+ #define ESP32S3_SARADC_SENS_CTRL2 0x0c
+ #define ESP32S3_SARADC_SENS_ATTEN1 0x14
+@@ -64,6 +65,9 @@ static void esp32s3_saradc_start_adc1(Esp32s3SarAdcState *s)
+     *ctrl2 = (*ctrl2 & ~ESP32S3_SARADC_DATA_MASK) |
+              ESP32S3_SARADC_DONE | raw;
+     s->apb_registers[ESP32S3_SARADC_APB_ADC1_DATA_STATUS / 4] = raw;
++    trace_esp32s3_saradc_conversion(
++        esp32s3_saradc_selected_channel(*ctrl2),
++        s->adc1_ch9_millivolts, raw);
+ }
+ 
+ static uint64_t esp32s3_saradc_read_register(uint32_t *registers,
+diff --git a/hw/adc/trace-events b/hw/adc/trace-events
+--- a/hw/adc/trace-events
++++ b/hw/adc/trace-events
+@@ -6,3 +6,6 @@ npcm7xx_adc_write(const char *id, uint64_t offset, uint32_t value) "%s offset: 0x%04" PRIx64 " value 0x%04" PRIx32
+ 
+ aspeed_adc_engine_read(uint32_t engine_id, uint64_t addr, uint64_t value) "engine[%u] 0x%" PRIx64 " 0x%" PRIx64
+ aspeed_adc_engine_write(uint32_t engine_id, uint64_t addr, uint64_t value) "engine[%u] 0x%" PRIx64 " 0x%" PRIx64
++
++# esp32s3_saradc.c
++esp32s3_saradc_conversion(unsigned int channel, uint16_t millivolts, uint16_t raw) "channel=%u millivolts=%u raw=%u"
+-- 
+2.43.0

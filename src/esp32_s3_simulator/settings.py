@@ -30,6 +30,11 @@ class Settings:
     worker_memory_limit_mib: int = 1536
     worker_cpu_limit_seconds: int = 90
     framebuffer_interval_ms: int = 100
+    max_recording_events: int = 4096
+    max_event_page_size: int = 500
+    max_replay_duration_seconds: int = 120
+    worker_trace_enabled: bool = True
+    max_trace_events_per_generation: int = 2048
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -76,5 +81,18 @@ class Settings:
             ),
             framebuffer_interval_ms=int(
                 os.environ.get("SIMULATOR_FRAMEBUFFER_INTERVAL_MS", "100")
+            ),
+            max_recording_events=int(
+                os.environ.get("SIMULATOR_MAX_RECORDING_EVENTS", "4096")
+            ),
+            max_event_page_size=int(
+                os.environ.get("SIMULATOR_MAX_EVENT_PAGE_SIZE", "500")
+            ),
+            max_replay_duration_seconds=int(
+                os.environ.get("SIMULATOR_MAX_REPLAY_DURATION_SECONDS", "120")
+            ),
+            worker_trace_enabled=_read_bool("SIMULATOR_WORKER_TRACE_ENABLED", True),
+            max_trace_events_per_generation=int(
+                os.environ.get("SIMULATOR_MAX_TRACE_EVENTS_PER_GENERATION", "2048")
             ),
         )

@@ -7,6 +7,7 @@ import { paintFramebuffer, parseFramebufferPacket } from "../lib/framebuffer";
 
 interface DisplayCanvasProps {
   sessionId: string | null;
+  streamGeneration: number;
   width: number;
   height: number;
   boardLabel: string;
@@ -14,6 +15,7 @@ interface DisplayCanvasProps {
 
 export function DisplayCanvas({
   sessionId,
+  streamGeneration,
   width,
   height,
   boardLabel,
@@ -47,7 +49,7 @@ export function DisplayCanvas({
       current = false;
       socket.close();
     };
-  }, [sessionId]);
+  }, [sessionId, streamGeneration]);
 
   return (
     <div className="display-surface" style={{ aspectRatio: `${width} / ${height}` }}>

@@ -36,11 +36,15 @@ describe("App", () => {
     expect(screen.getByText("ADC battery state")).toBeInTheDocument();
     expect(screen.queryByText("Charging")).not.toBeInTheDocument();
 
+    await user.click(screen.getByRole("tab", { name: "Timeline" }));
+    expect(screen.getByText("No session timeline")).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "StickS3" }));
 
     expect(screen.getByLabelText("StickS3 compatible 135 by 240 framebuffer"))
       .toBeInTheDocument();
     expect(screen.getByText("ESP32-S3-PICO-1-N8R8")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Power" }));
     expect(screen.getByText("M5PM1 behavioral state")).toBeInTheDocument();
     expect(screen.getByText("Charging")).toBeInTheDocument();
   });

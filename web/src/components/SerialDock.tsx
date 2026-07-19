@@ -7,6 +7,7 @@ import { openSessionSocket } from "../lib/api";
 
 interface SerialDockProps {
   sessionId: string | null;
+  streamGeneration: number;
 }
 
 const MAX_SERIAL_CHARACTERS = 96 * 1024;
@@ -18,7 +19,7 @@ async function serialChunk(data: unknown, decoder: TextDecoder): Promise<string>
   return "";
 }
 
-export function SerialDock({ sessionId }: SerialDockProps) {
+export function SerialDock({ sessionId, streamGeneration }: SerialDockProps) {
   const [text, setText] = useState("");
   const [follow, setFollow] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
@@ -66,7 +67,7 @@ export function SerialDock({ sessionId }: SerialDockProps) {
       pendingRef.current = "";
       if (socketRef.current === socket) socketRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, streamGeneration]);
 
   useEffect(() => {
     if (follow && outputRef.current) {

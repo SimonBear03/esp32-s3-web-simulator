@@ -5,6 +5,8 @@ import type {
   DebugStatus,
   InputEvent,
   MemoryRead,
+  ReplayStatus,
+  SessionEventPage,
   SimulationSession,
 } from "./types";
 
@@ -107,6 +109,27 @@ export function setBreakpoint(
 
 export function stepSession(sessionId: string): Promise<{ stop_reason: string }> {
   return request(`/v1/sessions/${sessionId}/debug/step`, { method: "POST" });
+}
+
+export function getSessionEvents(
+  sessionId: string,
+  after = 0,
+  limit = 200,
+): Promise<SessionEventPage> {
+  const query = new URLSearchParams({ after: String(after), limit: String(limit) });
+  return request(`/v1/sessions/${sessionId}/events?${query}`);
+}
+
+export function replaySession(sessionId: string, speed = 1): Promise<ReplayStatus> {
+  return request(`/v1/sessions/${sessionId}/replay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ speed }),
+  });
+}
+
+export function diagnosticsUrl(sessionId: string): string {
+  return `${API_BASE}/v1/sessions/${sessionId}/diagnostics`;
 }
 
 function websocketUrl(path: string): string {

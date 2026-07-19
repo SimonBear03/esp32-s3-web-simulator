@@ -253,6 +253,59 @@ checkmate, produced game-over framebuffer SHA-256
 and returned to the same setup frame after Enter. This confirms the added
 devices and nominal eFuse calibration do not regress the complete Chess path.
 
+## 2026-07-19 native trace and replay release gate
+
+Espressif QEMU commit `40edccac415693c5130f91c01d84176ae6008566`
+with tracked patches 0001 through 0011 produced QEMU 9.2.2 binary SHA-256
+`88003d34f2e614754fc02bf49f8c44aed755cb9d85ce31f356fe919b4c0c0719`.
+The build had SLiRP disabled, no non-system runtime search path, and no missing
+dynamic library. Patch 0010 supplied native board-device tracepoints; patch
+0011 made the no-SLiRP feature gate effective.
+
+The owned Cardputer ADV fixture SHA-256
+`fca5adb5dc4fc66097379e7d5c0ecad7331f93b3373a39cdbc6e4d4b826b160f`
+passed inside Bubblewrap with QMP and GDB enabled. In addition to the existing
+boot, framebuffer, input, IMU, ADC, UART, NVS, debugger, and cleanup contract,
+the run observed native ADC, display command/window, GPIO, I2C, SPI, keyboard,
+and IMU trace types. Repetitive sources produced explicit sampling markers
+without crowding out the later interactive traces. Fifteen accepted external
+actions then replayed from the normalized original flash image into generation
+2 at their recorded offsets. Replay reached the same injected motion and power
+values and the same final NVS boot count of 3 before reporting `completed`.
+
+The owned StickS3 fixture SHA-256
+`25d201b87156991becc7fb168b642dd63fb56d5cbe803e5c337a0083a4024b04`
+passed the equivalent boundary. It observed native display, GPIO, I2C, SPI,
+button, IMU, and M5PM1 power traces, then replayed all nine external actions
+into generation 2 and reached the same NVS boot count of 3. These two runs are
+the release gate for bounded recording, per-source trace sampling, baseline
+restoration, timed external-input replay, and worker generation rollover.
+
+## 2026-07-19 current Cardputer Chess branch separation
+
+The current Cardputer Chess `main` revision
+`5699ef4e5d0f0dc20d8b2775511a66ab4e81db04` built successfully, and its
+617712-byte merged image SHA-256 remained
+`2584687edc66495863c591ec7893331b15cc97aaf302c28c560a43c9ade93b4e`.
+It booted, rendered, accepted setup input, and preserved its selected level
+exactly across QMP reset, but entering a game reproduced its application-owned
+`loopTask` stack overflow. This image is therefore not a simulator release
+failure and is not described as the newest healthy application target.
+
+The newest remote repair branch `fix/cardputer-start-flicker` at unmodified
+revision `85b2672de49581aa26951e31e930584b2b3a292b` built with 53.7% of
+configured RAM and 16.5% of configured flash. Its 618848-byte merged image had
+SHA-256
+`3d36f9221ca7958ca9d6ea3aeebf990199a003ce586ab35a2a5e02bad67a23fa`.
+Inside the same traced Bubblewrap worker, its saved-level framebuffer SHA-256
+`4c997b51aed7a1cf0ef1dfe176b6a0d25b00fcf7ab6074cdd79c77744ce7c833`
+matched before and after QMP reset. Real Cardputer key events then completed a
+15-ply legal game (`1. e4 c5 2. Nf3 Nc6 3. Bb5 f6 4. d4 g5 5. Nxg5 Ne5
+6. dxe5 h5 7. exf6 a5 8. f7#`). The game-over framebuffer SHA-256 was
+`4aa3c9b7c3b726174c16e84cba29158ee2a734def7eb6dc0d6f50a965be7171b`;
+the worker remained running and Enter returned to setup. No Chess firmware or
+build output is distributed by this repository.
+
 ## Evidence rules
 
 - Record the exact QEMU commit, patch set, firmware source revision, build

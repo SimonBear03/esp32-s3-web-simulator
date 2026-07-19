@@ -18,7 +18,7 @@ for command_name in git python3 ninja pkg-config cc; do
     fi
 done
 
-for package_name in glib-2.0 pixman-1 libgcrypt slirp; do
+for package_name in glib-2.0 pixman-1 libgcrypt; do
     if ! pkg-config --exists "$package_name"; then
         echo "missing pkg-config dependency: $package_name" >&2
         exit 1
@@ -33,7 +33,6 @@ fi
 
 git -C "$SOURCE_DIR" fetch --depth=1 origin "$QEMU_COMMIT"
 git -C "$SOURCE_DIR" checkout --detach "$QEMU_COMMIT"
-git -C "$SOURCE_DIR" submodule update --init --recursive --depth=1
 
 ACTUAL_COMMIT=$(git -C "$SOURCE_DIR" rev-parse HEAD)
 if [ "$ACTUAL_COMMIT" != "$QEMU_COMMIT" ]; then
@@ -61,8 +60,7 @@ cd "$SOURCE_DIR"
     --disable-sdl \
     --disable-virglrenderer \
     --disable-vnc \
-    --enable-slirp \
-    --with-git-submodules=ignore
+    --disable-slirp
 
 ninja -C "$BUILD_DIR" qemu-system-xtensa
 

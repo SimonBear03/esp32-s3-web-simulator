@@ -75,10 +75,12 @@ conservative quotas, monitoring, and the outer service sandbox remain required.
 
 ## Data retention
 
-The default contract is ephemeral: uploaded firmware and mutated flash/NVS are
-destroyed with the session. Any future save-state or downloadable-diagnostics
-feature must be explicit, access-controlled, size-bounded, and must exclude the
-uploaded firmware by default.
+The default contract is ephemeral: uploaded firmware, its in-memory replay
+baseline, recorded UART payloads, and mutated flash/NVS are destroyed with the
+session. Diagnostics are explicit, access-controlled by the hosting gateway,
+size-bounded, and exclude firmware, mutated flash, framebuffer pixels, debug
+memory, and UART payloads. The replay baseline and private UART actions never
+cross the public API.
 
 QEMU documents the GDB stub's lack of authentication and recommends securing
 its endpoint separately: <https://www.qemu.org/docs/master/system/gdb.html>.

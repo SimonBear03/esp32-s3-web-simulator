@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from esp32_s3_simulator.boards import CARDPUTER_ADV, STICKS3, BoardProfile
 from esp32_s3_simulator.firmware import ValidatedFirmware
 from esp32_s3_simulator.framebuffer import RGBFrame, parse_framebuffer_packet
 from esp32_s3_simulator.gdb import GdbRemoteError
+from esp32_s3_simulator.recording import ReplayAction
 from esp32_s3_simulator.sessions import (
     MAX_DEBUG_BREAKPOINTS,
     SessionManager,
@@ -96,12 +98,8 @@ async def test_sticks3_runtime_inputs_reach_qmp(
     monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
 
     await manager.send_button(session.id, "a", True)
-    await manager.set_imu_sample(
-        session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0)
-    )
-    await manager.set_power_state(
-        session.id, battery_mv=3700, vin_mv=0, charging=False
-    )
+    await manager.set_imu_sample(session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0))
+    await manager.set_power_state(session.id, battery_mv=3700, vin_mv=0, charging=False)
 
     assert [call[0] for call in calls] == ["qom-set", "qom-set", "qom-set"]
     assert calls[0][1] == {
@@ -119,6 +117,190 @@ async def test_sticks3_runtime_inputs_reach_qmp(
         "property": "power-state",
         "value": "3700,0,0",
     }
+
+
+async def test_recording_is_bounded_and_diagnostics_redact_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    manager._settings = Settings(
+        runtime_root=tmp_path,
+        qemu_executable=tmp_path / "qemu",
+        rom_directory=tmp_path / "roms",
+        native_workers_enabled=True,
+        max_recording_events=3,
+    )
+
+    class FakeStdin:
+        def write(self, _payload: bytes) -> None:
+            pass
+
+        async def drain(self) -> None:
+            pass
+
+    class FakeProcess:
+        stdin = FakeStdin()
+
+    async def execute_qmp(
+        _socket: Path, _command: str, _arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+    session.process = FakeProcess()  # type: ignore[assignment]
+    secret = b"wifi-password=never-export-this"
+
+    await manager.send_key(session.id, "a", True)
+    await manager.send_key(session.id, "a", False)
+    await manager.write_serial(session.id, secret)
+    await manager.reset(session.id)
+
+    events = manager.list_events(session.id, after=0, limit=100)
+    diagnostics = manager.diagnostics(session.id)
+    serialized = json.dumps(diagnostics)
+
+    assert events["events_dropped"] == 1
+    assert events["cursor_truncated"] is True
+    assert len(events["events"]) == 3
+    assert "never-export-this" not in serialized
+    assert diagnostics["privacy"]["firmware_bytes_included"] is False  # type: ignore[index]
+    assert diagnostics["privacy"]["serial_payloads_included"] is False  # type: ignore[index]
+    assert session.replay_actions_dropped == 1
+
+
+async def test_replay_restores_initial_flash_and_reapplies_recorded_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.initial_flash_image = b"original-flash-image"
+    session.flash_path.write_bytes(b"mutated-nvs-state")
+    session.replay_actions.append(ReplayAction(0, "key", ("enter", True)))
+    qmp_calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def terminate_worker(_session: SessionRecord) -> None:
+        _session.process = None
+        _session.reader_task = None
+
+    async def launch(_session: SessionRecord) -> None:
+        _session.state = SessionState.RUNNING
+
+    async def execute_qmp(
+        _socket: Path, command: str, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        qmp_calls.append((command, arguments))
+        return {}
+
+    monkeypatch.setattr(manager, "_terminate_worker", terminate_worker)
+    monkeypatch.setattr(manager, "_launch", launch)
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+
+    queued = await manager.start_replay(session.id, 1.0)
+    task = session.replay_task
+    assert task is not None
+    await task
+
+    assert queued["status"] == "queued"
+    assert session.replay_status == "completed"
+    assert session.generation == 2
+    assert session.flash_path.read_bytes() == b"original-flash-image"
+    assert [call[0] for call in qmp_calls] == ["input-send-event"]
+    assert len(session.replay_actions) == 1
+    assert manager.list_events(session.id)["events"][-1]["type"] == "replay.completed"  # type: ignore[index]
+
+
+async def test_worker_peripheral_trace_is_parsed_and_capped(tmp_path: Path) -> None:
+    manager, session = manager_with_session(tmp_path)
+    manager._settings = Settings(
+        runtime_root=tmp_path,
+        qemu_executable=tmp_path / "qemu",
+        rom_directory=tmp_path / "roms",
+        native_workers_enabled=True,
+        max_trace_events_per_generation=1,
+    )
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"esp32_gpio_input pin=11 level=0 interrupt=1\n")
+    stream.feed_data(b"i2c_recv recv(addr:0x34) data:0x24\n")
+    stream.feed_eof()
+
+    await manager._read_worker_trace(session, stream)
+
+    assert session.trace_events_recorded == 1
+    assert session.trace_events_dropped == 1
+    assert [event["type"] for event in manager.list_events(session.id)["events"]] == [
+        "peripheral.gpio.input",
+        "peripheral.trace.truncated",
+    ]
+
+
+async def test_noisy_worker_trace_is_sampled_without_hiding_later_inputs(
+    tmp_path: Path,
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    stream = asyncio.StreamReader()
+    for _ in range(65):
+        stream.feed_data(b"i2c_send send(addr:0x34) data:0x24\n")
+    stream.feed_data(b"bmi270_sample accel_mg=1000,0,0 gyro_mdps=0,0,250000\n")
+    stream.feed_eof()
+
+    await manager._read_worker_trace(session, stream)
+
+    event_types = [event["type"] for event in manager.list_events(session.id, limit=200)["events"]]
+    assert event_types.count("peripheral.i2c.send") == 64
+    assert event_types[-2:] == [
+        "peripheral.trace.sampled",
+        "peripheral.imu.sample",
+    ]
+    assert session.trace_events_recorded == 65
+    assert session.trace_events_dropped == 1
+
+
+async def test_global_trace_truncation_is_reported_after_source_sampling(
+    tmp_path: Path,
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    manager._settings = Settings(
+        runtime_root=tmp_path,
+        qemu_executable=tmp_path / "qemu",
+        rom_directory=tmp_path / "roms",
+        native_workers_enabled=True,
+        max_trace_events_per_generation=65,
+    )
+    stream = asyncio.StreamReader()
+    for _ in range(65):
+        stream.feed_data(b"i2c_send send(addr:0x34) data:0x24\n")
+    stream.feed_data(b"bmi270_sample accel_mg=1,2,3 gyro_mdps=4,5,6\n")
+    stream.feed_data(b"sticks3_button button=a pressed=1\n")
+    stream.feed_eof()
+
+    await manager._read_worker_trace(session, stream)
+
+    event_types = [event["type"] for event in manager.list_events(session.id, limit=200)["events"]]
+    assert "peripheral.trace.sampled" in event_types
+    assert "peripheral.imu.sample" in event_types
+    assert event_types[-1] == "peripheral.trace.truncated"
+    assert session.trace_events_recorded == 65
+    assert session.trace_events_dropped == 2
+
+
+async def test_stop_releases_private_firmware_uart_and_replay_data(
+    tmp_path: Path,
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.initial_flash_image = b"private-firmware"
+    session.replay_actions.append(ReplayAction(1, "serial", b"private-uart"))
+    session.serial_buffer.append(b"private-output")
+    session.serial_output_bytes = len(b"private-output")
+
+    await manager.stop(session.id)
+
+    assert session.initial_flash_image == b""
+    assert not session.replay_actions
+    assert not session.serial_buffer
+    diagnostics = json.dumps(manager.diagnostics(session.id))
+    assert "private-firmware" not in diagnostics
+    assert "private-uart" not in diagnostics
+    assert "private-output" not in diagnostics
+    assert session.serial_output_bytes == len(b"private-output")
 
 
 async def test_capture_framebuffer_uses_private_qmp_file_and_removes_it(

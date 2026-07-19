@@ -75,7 +75,7 @@ export function useSimulatorSession(): SimulatorSessionController {
       socket.close();
       if (inputSocketRef.current === socket) inputSocketRef.current = null;
     };
-  }, [session?.id, session?.state]);
+  }, [session?.generation, session?.id, session?.state]);
 
   useEffect(() => {
     if (!session || !ACTIVE_STATES.has(session.state)) return;

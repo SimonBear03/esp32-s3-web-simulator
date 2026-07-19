@@ -36,7 +36,10 @@ compatibility milestone rather than the owned release gate. The responsive
 React workbench now supports local
 firmware checks, real session lifecycle controls, live framebuffer and UART
 streams, virtual device inputs, deterministic sensor/power controls, and the
-bounded debugger on desktop and portrait layouts. The debugger
+bounded debugger on desktop and portrait layouts. It also exposes a bounded
+typed timeline, privacy-preserving diagnostics download, native peripheral
+traces, and deterministic external-input replay from the originally uploaded
+flash/NVS baseline. The debugger
 supports synchronized pause/resume, Xtensa register snapshots, memory reads,
 hardware breakpoints, and single-step on both profiles. QEMU's raw GDB socket
 remains private to each worker and is never proxied to a browser. Production
@@ -49,6 +52,8 @@ Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
 firmware has passed boot, virtual ST7789 rendering, TCA8418 input, persistent
 application NVS, embedded move search, checkmate, and return-to-setup proofs.
+The newest tested repair-branch revision is recorded separately from the
+currently failing application `main` revision in `docs/conformance.md`.
 
 ## Product Boundary
 

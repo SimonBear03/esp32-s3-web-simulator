@@ -20,6 +20,7 @@ def command_for(board_id: str) -> tuple[str, ...]:
         Path("/runtime/flash.bin"),
         Path("/runtime/qmp.sock"),
         Path("/runtime/gdb.sock"),
+        trace_enabled=True,
     )
 
 
@@ -41,6 +42,14 @@ def test_worker_command_disables_network_and_exposes_qmp_and_serial() -> None:
     assert "path=/runtime/gdb.sock" in command[command.index("-chardev") + 1]
     assert "-no-reboot" not in command
     assert "-m" not in command
+    trace_options = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-trace"
+    ]
+    assert "enable=esp32s3_gpspi_transaction" in trace_options
+    assert "enable=i2c_send" in trace_options
+    assert trace_options[-1] == "file=/dev/stderr"
 
 
 def test_sticks3_worker_enables_eight_mebibytes_of_psram() -> None:

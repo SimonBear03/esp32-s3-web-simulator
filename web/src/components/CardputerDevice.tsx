@@ -12,6 +12,7 @@ import { DisplayCanvas } from "./DisplayCanvas";
 
 interface CardputerDeviceProps {
   sessionId: string | null;
+  streamGeneration: number;
   inputEnabled: boolean;
   onKey: (key: string, pressed: boolean) => void;
 }
@@ -29,6 +30,7 @@ function updatePressedKey(
 
 export function CardputerDevice({
   sessionId,
+  streamGeneration,
   inputEnabled,
   onKey,
 }: CardputerDeviceProps) {
@@ -87,6 +89,7 @@ export function CardputerDevice({
           boardLabel="Cardputer ADV compatible"
           height={135}
           sessionId={sessionId}
+          streamGeneration={streamGeneration}
           width={240}
         />
       </div>

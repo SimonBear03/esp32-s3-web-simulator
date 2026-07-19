@@ -27,7 +27,9 @@ ELF loading will be a separate explicit mode; an ELF is not silently treated as
 a flash image.
 
 The response includes an opaque session ID, board ID, timestamps, state, exit
-code when known, and non-secret firmware metadata.
+code when known, non-secret firmware metadata, a monotonic `generation`, and
+bounded recording/replay summaries. Generation `1` is the uploaded baseline;
+each replay increments it after restoring that baseline.
 
 Production workers enable private QMP and GDB Unix sockets for worker control.
 `SIMULATOR_WORKER_QMP_ENABLED=false` exists only for constrained test sandboxes
@@ -151,7 +153,56 @@ If the guest reaches a breakpoint after resume, its state changes back to
 `paused` and `debug/status` reports the stop reply. Clients should poll session
 or debug status until the later event-stream protocol is implemented.
 
+## Timeline and diagnostics
+
+`GET /v1/sessions/{id}/events` returns the session's bounded typed event
+timeline. The optional `after` cursor is an event sequence and `limit` is capped
+by `SIMULATOR_MAX_EVENT_PAGE_SIZE` (500 by default). The response reports when
+older events or the requested cursor were truncated. Events contain generation,
+monotonic offset, category, type, source, and bounded structured metadata.
+
+The service records accepted external inputs, reset/pause/resume controls,
+replay lifecycle, worker lifecycle, and native allowlisted peripheral events.
+The current QEMU worker emits SPI transaction summaries, I2C bus activity,
+GPIO transitions, ST7789 commands/windows, keyboard or button transitions, IMU
+samples, power state, and ADC conversions. Repetitive trace sources are sampled
+at deterministic per-source limits so boot-time bus traffic cannot crowd later
+interactive events out of the global generation bound. A typed sampling marker
+records when this happens. UART input appears only as a byte count and SHA-256
+digest; its contents are never present in the public timeline.
+`SIMULATOR_MAX_RECORDING_EVENTS` bounds both public events and replayable input
+actions (4096 each by default). Replay fails closed if the input-action bound
+was exceeded, because silently replaying an incomplete recording would be
+misleading.
+
+`GET /v1/sessions/{id}/diagnostics` downloads
+`esp32-s3-simulator-diagnostics/v1` JSON. It contains session and worker
+metadata, firmware hashes, replay status, the bounded timeline, and redacted
+serial byte statistics. It excludes uploaded firmware bytes, mutated
+flash/NVS, framebuffer pixels, debug memory data, and UART payloads.
+
+## External-input replay
+
+`POST /v1/sessions/{id}/replay` accepts `{"speed":1}` where speed is between
+0.25 and 4. The operation is asynchronous; `GET /v1/sessions/{id}/replay` and
+normal session polling expose status. A replay:
+
+1. stops the private worker;
+2. overwrites its flash with the in-memory, original normalized upload;
+3. starts a new worker generation;
+4. reapplies accepted key, button, IMU, power, UART-input, and reset actions at
+   their recorded monotonic offsets.
+
+Pause/resume and debug operations are observations or execution controls, not
+external board stimuli, so they are present in the timeline but excluded from
+the replay program. Live input is rejected while replay runs. This is
+deterministic external-input replay against the same simulator build and board
+model; it is not a claim of instruction-level determinism, simulated network
+determinism, or physical/electrical certification. Replays are bounded by
+`SIMULATOR_MAX_REPLAY_DURATION_SECONDS` (120 seconds by default).
+
 ## Pending protocol surfaces
 
-Deterministic peripheral traces remain pending. They are not represented as
-fake-success endpoints until their worker implementations exist.
+Instruction/timing traces, source-symbol backtraces, and CPU-state rewind remain
+pending. They are not represented as fake-success events until their execution
+and privacy contracts exist.

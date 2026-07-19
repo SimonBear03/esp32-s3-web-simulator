@@ -64,6 +64,15 @@ through a bounded QOM property; firmware still performs a normal ADC read and
 calibration. The behavioral model does not claim electrical noise, per-chip
 calibration, charging state, current draw, or brownout fidelity.
 
+`patches/0010-esp32s3-peripheral-tracing.patch` adds bounded, payload-free trace
+events for the board-facing SPI, display, GPIO, keyboard, IMU, power, and ADC
+models. The worker enables an explicit allowlist and converts these native
+events into the public session timeline; framebuffer pixels and serial payloads
+are never copied into diagnostics.
+
+`patches/0011-qemu-honor-disabled-slirp.patch` fixes the pinned fork's feature
+gate so `--disable-slirp` actually removes the user-mode networking backend.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:
@@ -71,7 +80,7 @@ On Ubuntu 24.04, install the native build dependencies:
 ```sh
 sudo apt-get install \
   build-essential git ninja-build pkg-config python3-venv \
-  libglib2.0-dev libpixman-1-dev libgcrypt20-dev libslirp-dev
+  libglib2.0-dev libpixman-1-dev libgcrypt20-dev
 ```
 
 Then run:
@@ -80,9 +89,11 @@ Then run:
 scripts/build-qemu.sh
 ```
 
-The script clones the immutable commit and its pinned submodules into the
-gitignored `.cache/qemu/` directory, applies the tracked patches in order, and builds only
-`qemu-system-xtensa`. It does not download or commit user firmware.
+The script clones the immutable commit into the gitignored `.cache/qemu/`
+directory, lets QEMU fetch only the build subprojects pinned by that commit,
+applies the tracked patches in order, and builds only `qemu-system-xtensa`.
+Guest networking support is compiled out. It does not download or commit user
+firmware.
 
 Workers select the board model with `-M esp32s3,board-profile=cardputer-adv`
 or `-M esp32s3,board-profile=sticks3`. The service translates its stable input
@@ -95,5 +106,6 @@ RGB output before exposing it through the engine-neutral web protocol.
 
 An ESP32-S3 boot ROM is required at runtime. It is not distributed by this
 repository; the operator must obtain it from Espressif and review the applicable
-terms. Production workers must invoke QEMU with guest networking disabled and
-must also be isolated at the operating-system/container boundary.
+terms. This build compiles out SLiRP guest networking, workers also invoke QEMU
+with networking disabled, and production workers must be isolated at the
+operating-system/container boundary.

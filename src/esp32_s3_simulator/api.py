@@ -5,7 +5,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from . import __version__
@@ -84,6 +94,12 @@ class SessionControlMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["pause", "resume", "reset"]
+
+
+class SessionReplayMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    speed: Annotated[float, Field(ge=0.25, le=4.0)] = 1.0
 
 
 class DebugMemoryReadMessage(BaseModel):
@@ -188,6 +204,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except (GdbRemoteError, QmpError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/v1/sessions/{session_id}/events")
+    async def session_events(
+        session_id: str,
+        after: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1)] = 200,
+    ) -> dict[str, object]:
+        try:
+            return manager.list_events(session_id, after=after, limit=limit)
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+
+    @app.get("/v1/sessions/{session_id}/diagnostics")
+    async def session_diagnostics(session_id: str) -> JSONResponse:
+        try:
+            payload = manager.diagnostics(session_id)
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        return JSONResponse(
+            payload,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="esp32-s3-simulator-{session_id}.json"'
+                ),
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.get("/v1/sessions/{session_id}/replay")
+    async def session_replay_status(session_id: str) -> dict[str, object]:
+        try:
+            return manager.replay_status(session_id)
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+
+    @app.post("/v1/sessions/{session_id}/replay", status_code=202)
+    async def replay_session(
+        session_id: str, request: SessionReplayMessage
+    ) -> dict[str, object]:
+        try:
+            return await manager.start_replay(session_id, request.speed)
+        except SessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail="simulation session not found") from error
+        except SessionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/v1/sessions/{session_id}/debug/status")
     async def debug_status(session_id: str) -> dict[str, object]:

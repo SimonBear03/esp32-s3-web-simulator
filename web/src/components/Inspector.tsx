@@ -12,8 +12,9 @@ import type {
 import { DebugInspector } from "./debug/DebugInspector";
 import { InputInspector } from "./inspector/InputInspector";
 import { PowerInspector } from "./inspector/PowerInspector";
+import { TimelineInspector } from "./inspector/TimelineInspector";
 
-export type InspectorTab = "inputs" | "debug" | "power";
+export type InspectorTab = "inputs" | "debug" | "power" | "timeline";
 
 type InputEventWithoutSequence = InputEvent extends infer Event
   ? Event extends InputEvent
@@ -32,6 +33,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: "inputs", label: "Inputs" },
   { id: "debug", label: "Debug" },
   { id: "power", label: "Power" },
+  { id: "timeline", label: "Timeline" },
 ];
 
 export function Inspector({
@@ -86,6 +88,7 @@ export function Inspector({
             onPower={sendPower}
           />
         ) : null}
+        {tab === "timeline" ? <TimelineInspector session={session} /> : null}
       </div>
     </aside>
   );
