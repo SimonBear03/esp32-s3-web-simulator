@@ -27,7 +27,10 @@ assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
 passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
 and button input are now live on StickS3; its behavioral BMI270 and M5PM1 models
 accept deterministic runtime samples through the typed web protocol. Cardputer
-power and hosted-web milestones remain in progress. A bounded debugger now
+power remains in progress. The responsive React workbench now supports local
+firmware checks, real session lifecycle controls, live framebuffer and UART
+streams, virtual device inputs, deterministic sensor/power controls, and the
+bounded debugger on desktop and portrait layouts. The debugger
 supports synchronized pause/resume, Xtensa register snapshots, memory reads,
 hardware breakpoints, and single-step on both profiles. QEMU's raw GDB socket
 remains private to each worker and is never proxied to a browser.
@@ -73,11 +76,31 @@ The release-gate policy and current boot-spike evidence live in
 Run the repository foundation checks with:
 
 ```sh
+cd web && npm ci && cd ..
 make check
 ```
 
-`make check` validates repository policy, lints the service, and runs its test
-suite. The versioned browser/service contract is documented in
+`make check` validates repository policy, lints and tests the service, and
+type-checks, tests, and produces a release build of the browser client. Install
+the Playwright Chromium runtime once and run rendered browser checks with:
+
+```sh
+cd web
+npx playwright install chromium
+npm run test:e2e
+```
+
+For local development, run the service on port 8000 and the Vite client on port
+4173 in separate shells. Vite proxies the versioned HTTP and WebSocket API:
+
+```sh
+UV_CACHE_DIR=/tmp/esp32-s3-uv-cache uv run uvicorn simulator_service.app:app --reload
+cd web && npm run dev
+```
+
+The QEMU worker still requires the pinned emulator binary and ROM configuration
+described in [emulator/qemu/README.md](emulator/qemu/README.md). The versioned
+browser/service contract is documented in
 [docs/protocol.md](docs/protocol.md).
 
 ## Remote

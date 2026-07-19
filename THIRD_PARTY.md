@@ -18,6 +18,12 @@ updated before a new component or artifact is committed or distributed.
 | Bosch BMI270 documentation | BMI270 datasheet, current design reference | Bosch Sensortec documentation terms | Documentation is not copied or redistributed | Authoritative device identity, register map, ranges, and sample encoding for the original behavioral model |
 | M5Stack M5Unified and M5PM1 libraries | Local reference snapshots; upstream MIT projects | MIT | Not vendored; no source code copied | Cross-checks public StickS3 initialization sequences and M5PM1 register use |
 | M5Stack device names | Cardputer ADV and StickS3 compatibility references | Third-party trademarks | Text compatibility references only; no official product artwork | Identifies target hardware profiles |
+| React and React DOM | `19.2.7` | MIT | Installed from the pinned npm lockfile and bundled into the browser client | Browser UI runtime |
+| Lucide React | `1.25.0` | ISC | Installed from the pinned npm lockfile; selected SVG components are bundled into the browser client | Interface iconography |
+| Vite and `@vitejs/plugin-react` | `8.1.5` and `6.0.3` | MIT | Pinned npm build dependencies; not served as standalone runtime packages | Browser development server and release build |
+| TypeScript and DefinitelyTyped packages | TypeScript `7.0.2`; types pinned in `web/package-lock.json` | Apache-2.0 and MIT | Pinned npm build dependencies; type declarations are not shipped as browser runtime code | Static browser-client validation |
+| Vitest, Testing Library, and jsdom | Versions pinned in `web/package-lock.json` | MIT | Development and test dependencies only | Browser component and protocol-helper tests |
+| Playwright Test | `1.61.1` | Apache-2.0 | Test dependency only; browser binaries are downloaded separately and are not committed | Rendered desktop and portrait browser verification |
 
 ## Boundary rules
 
