@@ -38,9 +38,10 @@ Successful base conformance requires:
   restoring heartbeats, and QMP reset preserving the private flash image;
 - `ping\n` producing `SIM:PONG`;
 - TCA8418 configuration at address `0x34` over the Cardputer ADV's I2C1
-  controller, with QMP-injected `A` press/release reaching the firmware through
-  nINT, GPIO 11, the ESP-IDF ISR, and producing
-  raw FIFO events `0x8d` and `0x0d` without polling;
+  controller, with QMP-injected `W`, `A`, `S`, `D`, and Enter press/release
+  events reaching the firmware through nINT, GPIO 11, and the ESP-IDF ISR
+  without polling; the exact FIFO pairs are `0x8c/0x0c`, `0x8d/0x0d`,
+  `0x91/0x11`, `0x97/0x17`, and `0xc3/0x43`;
 - Cardputer ADV LEDC channel 7 setup on GPIO 38 at 256 Hz with an 8-bit duty of
   110, exercising the display-backlight initialization path used by M5GFX;
 - a CPU-FIFO SPI3 transaction path that initializes the Cardputer ADV ST7789,

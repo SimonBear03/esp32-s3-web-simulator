@@ -48,13 +48,14 @@ host paths, no secret-like environment keys, denied nested user namespace
 creation, and a writable private scratch directory.
 
 The pinned worker and owned Cardputer firmware were exercised through the real
-service runner. QMP accepted `input-send-event` for
-an `A` key down/up pair. Firmware polling the emulated TCA8418 FIFO observed
-`SIM:KEY raw=0x8d` followed by `SIM:KEY raw=0x0d` with firmware polling removed.
-This proves the host event, QMP, board mapping, TCA8418 nINT, GPIO 11 edge,
-ESP-IDF ISR, I2C controller, device register, and firmware-read path end to end.
-The service runner performs these same assertions automatically when its normal
-private QMP socket is available.
+service runner. QMP accepted repeated `input-send-event` requests for `W`, `A`,
+`S`, `D`, and Enter down/up pairs. Firmware reading the emulated TCA8418 FIFO
+observed exact pairs `0x8c/0x0c`, `0x8d/0x0d`, `0x91/0x11`, `0x97/0x17`, and
+`0xc3/0x43` with firmware polling removed. This proves the host event, repeated
+QMP connection, board mapping, TCA8418 nINT, GPIO 11 edge, ESP-IDF ISR, I2C
+controller, device register, and firmware-read path end to end. The service
+runner performs these same assertions automatically when its normal private
+QMP socket is available.
 
 The same owned firmware initializes ESP-IDF SPI3 without DMA, programs the
 ST7789 visible window at controller coordinates `(40,53)` through `(279,187)`,
@@ -167,6 +168,47 @@ RGB hashes differed (`4192754852` then `3632196620`).
 This proves boot, current M5GFX board detection, SPI3/ST7789 rendering, browser
 framebuffer delivery, and one real keyboard transition for the application.
 It does not yet prove application NVS behavior or completion of a full game.
+
+## 2026-07-19 newest Cardputer Chess behavioral proof
+
+After the in-progress Chess UI advanced, the compatibility target moved to the
+unmodified remote revision
+`99503e035ed0eece99fd544f4ccaffe7081e10e9`. Its locally generated 618848-byte
+merged image had SHA-256:
+
+```text
+732a79a2990635384ee6a9d43cbde9a120b990b8f7e692acdf4036c908e4454a
+```
+
+The firmware build used 53.7% of configured RAM and 16.5% of configured flash.
+The image is test input only and is not committed or redistributed by this
+repository.
+
+The exact image booted unmodified inside the Bubblewrap worker and rendered its
+new setup UI. Changing the saved level produced framebuffer SHA-256
+`00204fa4bb8c30727a96df3c595ddfd1c937758d296d19f6abfb38e0375fcc13`
+both before and after a QMP reset, proving application-level Preferences/NVS
+persistence rather than only fixture-level storage. Starting a game produced
+framebuffer SHA-256
+`2f13da479580702cacd832dd9557e337bdc19f428c3588f5c74247d3e8b72ddf`.
+Real Cardputer key events then played `e2-e4`; the firmware's embedded ESP32
+search replied `c7-c6`, and the settled framebuffer SHA-256 was
+`9494f08035ad87582d4304f8b0104a8aa9b3829ce4fbd63a060d2c81ed47da8f`.
+The worker remained running with no panic, stack-canary failure, or reset loop.
+
+This run exposed a simulator-owned QMP cleanup defect: after QEMU had accepted
+an input event and returned its matching response, its immediate peer close
+could be re-raised by `asyncio` during `wait_closed()` and falsely report the
+successful key request as failed. Public-core commit `b6e0754` closes the
+one-shot transport after the response without waiting for peer shutdown. Unit
+coverage and the exact application rerun both passed after that change.
+
+The preceding Chess revision at `5699ef4` also exposed application-owned stack
+overflows when entering a game and then starting its search task. Those were
+separated with a disposable stack-only diagnostic build and were never treated
+as emulator failures. The newest unmodified revision completes one human and
+one engine turn without either failure. A complete legal game remains an open
+stress milestone, not a claimed result.
 
 ## Evidence rules
 

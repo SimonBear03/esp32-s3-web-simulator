@@ -178,10 +178,18 @@ async def run(args: argparse.Namespace) -> None:
                 )
 
                 if board.id == "cardputer-adv":
-                    await manager.send_key(session.id, "a", True)
-                    await manager.send_key(session.id, "a", False)
-                    await wait_for_text(session, "SIM:KEY raw=0x8d")
-                    await wait_for_text(session, "SIM:KEY raw=0x0d")
+                    navigation_keys = (
+                        ("w", 0x0C),
+                        ("a", 0x0D),
+                        ("s", 0x11),
+                        ("d", 0x17),
+                        ("enter", 0x43),
+                    )
+                    for key, raw_code in navigation_keys:
+                        await manager.send_key(session.id, key, True)
+                        await manager.send_key(session.id, key, False)
+                        await wait_for_text(session, f"SIM:KEY raw=0x{raw_code | 0x80:02x}")
+                        await wait_for_text(session, f"SIM:KEY raw=0x{raw_code:02x}")
                 else:
                     await manager.send_button(session.id, "a", True)
                     await wait_for_text(session, "SIM:BUTTON id=a pressed=1")
