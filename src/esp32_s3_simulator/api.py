@@ -139,9 +139,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/ready")
     async def ready() -> dict[str, object]:
+        worker_ready = await manager.worker_is_ready()
         return {
-            "status": "ready" if manager.worker_ready else "degraded",
-            "native_worker": manager.worker_ready,
+            "status": "ready" if worker_ready else "degraded",
+            "native_worker": worker_ready,
             "worker_sandbox": manager.worker_sandbox_mode,
         }
 

@@ -42,11 +42,7 @@ def test_worker_command_disables_network_and_exposes_qmp_and_serial() -> None:
     assert "path=/runtime/gdb.sock" in command[command.index("-chardev") + 1]
     assert "-no-reboot" not in command
     assert "-m" not in command
-    trace_options = [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "-trace"
-    ]
+    trace_options = [command[index + 1] for index, value in enumerate(command) if value == "-trace"]
     assert "enable=esp32s3_gpspi_transaction" in trace_options
     assert "enable=i2c_send" in trace_options
     assert trace_options[-1] == "file=/dev/stderr"
@@ -115,4 +111,20 @@ def test_worker_rejects_control_sockets_outside_its_session_directory() -> None:
             Path("/runtime/session/flash.bin"),
             Path("/runtime/other/qmp.sock"),
             None,
+        )
+
+
+def test_oci_broker_mode_never_builds_a_local_qemu_command() -> None:
+    with pytest.raises(ValueError, match="broker protocol"):
+        build_qemu_command(
+            QemuWorkerConfig(
+                Path("/not-mounted/qemu"),
+                Path("/not-mounted/roms"),
+                sandbox_mode=WorkerSandboxMode.OCI_BROKER,
+                broker_socket_path=Path("/run/esp32-simulator/worker-broker.sock"),
+            ),
+            CARDPUTER_ADV,
+            Path("/runtime/session/flash.bin"),
+            Path("/runtime/session/qmp.sock"),
+            Path("/runtime/session/gdb.sock"),
         )

@@ -43,10 +43,14 @@ flash/NVS baseline. The debugger
 supports synchronized pause/resume, Xtensa register snapshots, memory reads,
 hardware breakpoints, and single-step on both profiles. QEMU's raw GDB socket
 remains private to each worker and is never proxied to a browser. Production
-workers can now run inside a Bubblewrap boundary with new namespaces, no host
-network, no capabilities, read-only runtime inputs, a bounded temporary
-filesystem, and one writable session directory. Both board conformance suites
-pass through that boundary.
+workers can run inside the tested Bubblewrap boundary. The selected hostile
+internet boundary is now implemented as a peer-credential-gated broker in
+front of a dedicated rootless OCI daemon: the API never receives Docker
+authority, and each digest-pinned worker gets no network, a read-only root,
+no capabilities, seccomp/AppArmor, cgroup limits, QEMU's inner sandbox, and
+one validated session bind. Anonymous execution remains disabled until the
+live host acceptance suite proves every layer is active. Both board
+conformance suites already pass through the Bubblewrap rollback boundary.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
@@ -79,7 +83,8 @@ The emulator baseline is Espressif QEMU 9.2.2 built from a pinned source commit
 with tracked flash, I2C, GPIO, keyboard/button, SPI, display, PSRAM, IMU, and
 power/ADC patches. See
 [emulator/qemu/README.md](emulator/qemu/README.md) for native prerequisites and
-the reproducible build command.
+the reproducible build command. The production image and broker boundary are
+documented in [docs/worker-isolation.md](docs/worker-isolation.md).
 
 Licensing and redistribution decisions are recorded in
 [docs/licensing.md](docs/licensing.md) and [THIRD_PARTY.md](THIRD_PARTY.md).
@@ -117,16 +122,20 @@ described in [emulator/qemu/README.md](emulator/qemu/README.md). The versioned
 browser/service contract is documented in
 [docs/protocol.md](docs/protocol.md).
 
-Production deployments set `SIMULATOR_WORKER_SANDBOX_MODE=bubblewrap` and run
-the denial probe before accepting firmware:
+Controlled deployments can set `SIMULATOR_WORKER_SANDBOX_MODE=bubblewrap` and
+run the denial probe:
 
 ```sh
 UV_CACHE_DIR=/tmp/esp32-s3-uv-cache make sandbox-probe
 ```
 
-Direct worker mode remains the local-development default. A public deployment
-must additionally use the authenticated ownership gateway and hardened service
-configuration described in [docs/security.md](docs/security.md).
+Direct worker mode remains the local-development default. Anonymous public
+execution must use `SIMULATOR_WORKER_SANDBOX_MODE=oci-broker`, the dedicated
+rootless worker identity, and every live acceptance gate in
+[docs/worker-isolation.md](docs/worker-isolation.md). It must also use the
+ownership gateway and hardened service configuration in
+[docs/security.md](docs/security.md); failed isolation never falls back to a
+weaker mode.
 
 ## Remote
 

@@ -4,6 +4,7 @@ import asyncio
 import os
 import resource
 import shutil
+import stat
 import time
 from collections import deque
 from collections.abc import AsyncIterator
@@ -15,15 +16,23 @@ from pathlib import Path
 from uuid import uuid4
 
 from .boards import BoardProfile
+from .broker_protocol import (
+    BrokerProtocolError,
+    BrokerUnavailableError,
+    StartRequest,
+    connect_broker_worker,
+    probe_broker,
+)
 from .firmware import ValidatedFirmware, validate_and_pad_firmware, write_private_flash_image
 from .framebuffer import RGBFrame, encode_framebuffer_packet, parse_qemu_ppm
 from .gdb import GdbRemoteClient, GdbRemoteError
 from .inputs import qmp_button_event, qmp_imu_sample, qmp_key_event, qmp_power_state
-from .qemu import QemuWorkerConfig, build_qemu_command
+from .qemu import QemuWorkerConfig, WorkerSandboxMode, build_qemu_command
 from .qmp import QmpError, QmpUnavailableError, execute_qmp
 from .recording import ReplayAction, SessionEvent, serial_metadata
 from .settings import Settings
 from .tracing import TRACE_EVENT_LIMITS, parse_worker_trace_line
+from .worker_process import WorkerProcess
 
 
 class SessionCapacityError(RuntimeError):
@@ -71,7 +80,7 @@ class SessionRecord:
     initial_flash_image: bytes = field(default=b"", repr=False)
     state: SessionState = SessionState.STARTING
     exit_code: int | None = None
-    process: asyncio.subprocess.Process | None = None
+    process: WorkerProcess | None = None
     reader_task: asyncio.Task[None] | None = None
     trace_reader_task: asyncio.Task[None] | None = None
     serial_buffer: deque[bytes] = field(default_factory=lambda: deque(maxlen=256))
@@ -145,6 +154,11 @@ class SessionManager:
     def worker_ready(self) -> bool:
         if not self._settings.native_workers_enabled:
             return False
+        if (
+            self._settings.worker_sandbox_mode is WorkerSandboxMode.OCI_BROKER
+            and self._settings.worker_shared_group_gid is None
+        ):
+            return False
         try:
             self._worker_config().validate()
         except FileNotFoundError:
@@ -155,6 +169,13 @@ class SessionManager:
     def worker_sandbox_mode(self) -> str:
         return self._settings.worker_sandbox_mode.value
 
+    async def worker_is_ready(self) -> bool:
+        if not self.worker_ready:
+            return False
+        if self._settings.worker_sandbox_mode is WorkerSandboxMode.OCI_BROKER:
+            return await probe_broker(self._settings.worker_broker_socket)
+        return True
+
     def _worker_config(self) -> QemuWorkerConfig:
         return QemuWorkerConfig(
             executable=self._settings.qemu_executable,
@@ -162,10 +183,20 @@ class SessionManager:
             sandbox_mode=self._settings.worker_sandbox_mode,
             sandbox_executable=self._settings.worker_sandbox_executable,
             sandbox_readonly_paths=self._settings.worker_sandbox_readonly_paths,
+            broker_socket_path=self._settings.worker_broker_socket,
         )
 
     async def start(self) -> None:
         self._settings.runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        runtime_root_stat = self._settings.runtime_root.lstat()
+        if not stat.S_ISDIR(runtime_root_stat.st_mode) or runtime_root_stat.st_uid != os.getuid():
+            raise WorkerUnavailableError("simulator runtime root ownership is unsafe")
+        if (
+            self._settings.worker_sandbox_mode is WorkerSandboxMode.OCI_BROKER
+            and self._settings.worker_shared_group_gid is not None
+        ):
+            os.chown(self._settings.runtime_root, -1, self._settings.worker_shared_group_gid)
+            self._settings.runtime_root.chmod(0o2770)
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
 
     async def close(self) -> None:
@@ -176,7 +207,7 @@ class SessionManager:
             await self.stop(session_id)
 
     async def create(self, board: BoardProfile, upload: bytes) -> SessionRecord:
-        if not self.worker_ready:
+        if not await self.worker_is_ready():
             raise WorkerUnavailableError("native QEMU workers are not configured and enabled")
 
         async with self._lock:
@@ -193,7 +224,18 @@ class SessionManager:
             flash_path = runtime_directory / "flash.bin"
             qmp_socket_path = runtime_directory / "qmp.sock"
             gdb_socket_path = runtime_directory / "gdb.sock"
-            write_private_flash_image(flash_path, flash_image)
+            shared_group_gid = (
+                self._settings.worker_shared_group_gid
+                if self._settings.worker_sandbox_mode is WorkerSandboxMode.OCI_BROKER
+                else None
+            )
+            write_private_flash_image(
+                flash_path,
+                flash_image,
+                directory_mode=0o2770 if shared_group_gid is not None else 0o700,
+                file_mode=0o660 if shared_group_gid is not None else 0o600,
+                group_gid=shared_group_gid,
+            )
 
             session = SessionRecord(
                 id=session_id,
@@ -865,6 +907,27 @@ class SessionManager:
     async def _launch(self, session: SessionRecord) -> None:
         worker_config = self._worker_config()
         worker_config.validate()
+        if worker_config.sandbox_mode is WorkerSandboxMode.OCI_BROKER:
+            try:
+                process: WorkerProcess = await connect_broker_worker(
+                    worker_config.broker_socket_path,
+                    StartRequest(session_id=session.id, board_id=session.board.id),
+                )
+            except (BrokerUnavailableError, BrokerProtocolError) as error:
+                raise WorkerUnavailableError("isolated worker broker launch failed") from error
+        else:
+            process = await self._launch_local_worker(worker_config, session)
+        session.process = process
+        session.state = SessionState.RUNNING
+        session.reader_task = asyncio.create_task(self._read_serial(session, process))
+        if process.stderr:
+            session.trace_reader_task = asyncio.create_task(
+                self._read_worker_trace(session, process.stderr)
+            )
+
+    async def _launch_local_worker(
+        self, worker_config: QemuWorkerConfig, session: SessionRecord
+    ) -> asyncio.subprocess.Process:
         command = build_qemu_command(
             worker_config,
             session.board,
@@ -877,7 +940,7 @@ class SessionManager:
             ),
             trace_enabled=self._settings.worker_trace_enabled,
         )
-        process = await asyncio.create_subprocess_exec(
+        return await asyncio.create_subprocess_exec(
             *command,
             cwd=session.runtime_directory,
             stdin=asyncio.subprocess.PIPE,
@@ -890,13 +953,6 @@ class SessionManager:
                 self._settings.worker_cpu_limit_seconds,
             ),
         )
-        session.process = process
-        session.state = SessionState.RUNNING
-        session.reader_task = asyncio.create_task(self._read_serial(session, process))
-        if process.stderr:
-            session.trace_reader_task = asyncio.create_task(
-                self._read_worker_trace(session, process.stderr)
-            )
 
     async def _read_worker_trace(
         self, session: SessionRecord, stream: asyncio.StreamReader
@@ -941,9 +997,7 @@ class SessionManager:
             session.trace_events_recorded += 1
             self._record_event(session, "peripheral", event_type, "worker", data)
 
-    async def _read_serial(
-        self, session: SessionRecord, process: asyncio.subprocess.Process
-    ) -> None:
+    async def _read_serial(self, session: SessionRecord, process: WorkerProcess) -> None:
         if not process.stdout:
             return
         while chunk := await process.stdout.read(4096):

@@ -26,7 +26,7 @@ must be implemented in this public repository first.
 This repository does not commit or publish:
 
 - Espressif ROM binaries;
-- upstream or patched QEMU binaries;
+- public upstream or patched QEMU images/binaries containing an unreviewed ROM;
 - user firmware or ELF files;
 - runtime flash, NVS, trace, log, or crash artifacts;
 - M5Stack product artwork or extracted proprietary assets.
@@ -34,6 +34,11 @@ This repository does not commit or publish:
 The source build is pinned and reproducible. Operators obtain upstream inputs
 from their owners and must review those owners' terms before redistributing a
 combined deployment artifact. `THIRD_PARTY.md` is the authoritative ledger.
+
+The rootless worker build may create an operator-local image from a separately
+supplied ROM and its reviewed digest. That private runtime artifact is not a
+repository distribution. Publishing or transferring it is a separate action
+and remains prohibited until the ROM terms and required notices are resolved.
 
 ## Contribution rule
 

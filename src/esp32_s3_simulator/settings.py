@@ -25,6 +25,8 @@ class Settings:
     worker_sandbox_mode: WorkerSandboxMode = WorkerSandboxMode.DIRECT
     worker_sandbox_executable: Path = Path("/usr/bin/bwrap")
     worker_sandbox_readonly_paths: tuple[Path, ...] = DEFAULT_SANDBOX_READONLY_PATHS
+    worker_broker_socket: Path = Path("/run/esp32-simulator/worker-broker.sock")
+    worker_shared_group_gid: int | None = None
     max_concurrent_sessions: int = 2
     session_ttl_seconds: int = 120
     worker_memory_limit_mib: int = 1536
@@ -71,6 +73,17 @@ class Settings:
                 ).split(":")
                 if path
             ),
+            worker_broker_socket=Path(
+                os.environ.get(
+                    "SIMULATOR_WORKER_BROKER_SOCKET",
+                    "/run/esp32-simulator/worker-broker.sock",
+                )
+            ).resolve(),
+            worker_shared_group_gid=(
+                int(os.environ["SIMULATOR_SHARED_GROUP_GID"])
+                if os.environ.get("SIMULATOR_SHARED_GROUP_GID")
+                else None
+            ),
             max_concurrent_sessions=int(os.environ.get("SIMULATOR_MAX_SESSIONS", "2")),
             session_ttl_seconds=int(os.environ.get("SIMULATOR_SESSION_TTL_SECONDS", "120")),
             worker_memory_limit_mib=int(
@@ -79,15 +92,9 @@ class Settings:
             worker_cpu_limit_seconds=int(
                 os.environ.get("SIMULATOR_WORKER_CPU_LIMIT_SECONDS", "90")
             ),
-            framebuffer_interval_ms=int(
-                os.environ.get("SIMULATOR_FRAMEBUFFER_INTERVAL_MS", "100")
-            ),
-            max_recording_events=int(
-                os.environ.get("SIMULATOR_MAX_RECORDING_EVENTS", "4096")
-            ),
-            max_event_page_size=int(
-                os.environ.get("SIMULATOR_MAX_EVENT_PAGE_SIZE", "500")
-            ),
+            framebuffer_interval_ms=int(os.environ.get("SIMULATOR_FRAMEBUFFER_INTERVAL_MS", "100")),
+            max_recording_events=int(os.environ.get("SIMULATOR_MAX_RECORDING_EVENTS", "4096")),
+            max_event_page_size=int(os.environ.get("SIMULATOR_MAX_EVENT_PAGE_SIZE", "500")),
             max_replay_duration_seconds=int(
                 os.environ.get("SIMULATOR_MAX_REPLAY_DURATION_SECONDS", "120")
             ),

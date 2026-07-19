@@ -80,7 +80,7 @@ On Ubuntu 24.04, install the native build dependencies:
 ```sh
 sudo apt-get install \
   build-essential git ninja-build pkg-config python3-venv \
-  libglib2.0-dev libpixman-1-dev libgcrypt20-dev
+  libglib2.0-dev libpixman-1-dev libgcrypt20-dev libseccomp-dev
 ```
 
 Then run:
@@ -109,3 +109,10 @@ repository; the operator must obtain it from Espressif and review the applicable
 terms. This build compiles out SLiRP guest networking, workers also invoke QEMU
 with networking disabled, and production workers must be isolated at the
 operating-system/container boundary.
+
+The production worker image is built separately with
+`scripts/build-worker-image.sh`. Its base images must be digest-pinned, QEMU is
+built with libseccomp, and the reviewed ROM is supplied through a private
+BuildKit context with an expected SHA-256. The ROM is not committed to this
+repository. Keep the resulting image private unless the ROM redistribution
+terms have been reviewed.

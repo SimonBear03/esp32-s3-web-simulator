@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+import os
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -62,7 +63,19 @@ def validate_and_pad_firmware(
     return normalized, metadata
 
 
-def write_private_flash_image(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+def write_private_flash_image(
+    path: Path,
+    payload: bytes,
+    *,
+    directory_mode: int = 0o700,
+    file_mode: int = 0o600,
+    group_gid: int | None = None,
+) -> None:
+    path.parent.mkdir(mode=directory_mode, parents=True, exist_ok=False)
+    path.parent.chmod(directory_mode)
+    if group_gid is not None:
+        os.chown(path.parent, -1, group_gid)
     path.write_bytes(payload)
-    path.chmod(0o600)
+    path.chmod(file_mode)
+    if group_gid is not None:
+        os.chown(path, -1, group_gid)

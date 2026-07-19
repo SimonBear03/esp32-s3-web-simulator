@@ -38,7 +38,18 @@ exposed directly to the internet without that gateway or equivalent controls.
 ## Production isolation gate
 
 Process resource limits are defense in depth, not a complete hostile-code
-sandbox. The service now provides a production Bubblewrap worker mode that:
+sandbox. Bubblewrap remains available for controlled authenticated testing and
+rollback, but it is not the selected anonymous-internet boundary.
+
+The selected production design is the dedicated rootless OCI worker broker
+documented in [worker-isolation.md](worker-isolation.md). It keeps all Docker
+authority out of the API and gateway identities and applies an immutable image,
+outer seccomp/AppArmor, namespaces, cgroups, no network, a read-only root,
+capability removal, a single validated session bind, QEMU's inner seccomp
+sandbox, independent wall time, bounded I/O, and reconciliation. It fails closed
+instead of falling back when any required control is unavailable.
+
+The service also provides a Bubblewrap worker mode that:
 
 - creates new user, PID, IPC, UTS, cgroup, and network namespaces;
 - disables nested user namespaces and drops every effective capability;
@@ -56,9 +67,8 @@ denial probe separately verifies zero capabilities, no host routes, hidden host
 paths, a cleared secret-like environment, disabled nested user namespaces, and
 writable private scratch.
 
-Before an internet deployment accepts arbitrary public firmware, the worker
-must use that mode or an equivalent OS sandbox, and the containing service must
-also provide:
+Before an internet deployment accepts arbitrary public firmware, the live
+rootless OCI boundary and containing service must prove:
 
 - cgroup CPU, memory, process, and wall-clock limits;
 - a minimal syscall/device policy such as seccomp plus AppArmor or an
@@ -67,11 +77,10 @@ also provide:
 - upload, request, WebSocket, session, and account-level rate limits;
 - structured security logs that never contain firmware or secret values.
 
-The deployment should fail closed when any required isolation mechanism is
-absent. Direct worker mode is suitable for controlled local development, not
-public hostile workloads. Bubblewrap reduces filesystem, network, capability,
-and cross-session authority but still shares the host kernel; patch management,
-conservative quotas, monitoring, and the outer service sandbox remain required.
+Direct worker mode is suitable for controlled local development, not public
+hostile workloads. Bubblewrap reduces filesystem, network, capability, and
+cross-session authority but still shares the host kernel and is not an
+automatic availability fallback for anonymous sessions.
 
 ## Data retention
 

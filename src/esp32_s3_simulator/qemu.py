@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 import os
+import stat
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -12,6 +13,7 @@ from .tracing import TRACE_EVENT_NAMES
 class WorkerSandboxMode(StrEnum):
     DIRECT = "direct"
     BUBBLEWRAP = "bubblewrap"
+    OCI_BROKER = "oci-broker"
 
 
 DEFAULT_SANDBOX_READONLY_PATHS = (
@@ -28,8 +30,21 @@ class QemuWorkerConfig:
     sandbox_mode: WorkerSandboxMode = WorkerSandboxMode.DIRECT
     sandbox_executable: Path = Path("/usr/bin/bwrap")
     sandbox_readonly_paths: tuple[Path, ...] = DEFAULT_SANDBOX_READONLY_PATHS
+    broker_socket_path: Path = Path("/run/esp32-simulator/worker-broker.sock")
 
     def validate(self) -> None:
+        if self.sandbox_mode is WorkerSandboxMode.OCI_BROKER:
+            try:
+                socket_stat = self.broker_socket_path.stat()
+            except FileNotFoundError as error:
+                raise FileNotFoundError(
+                    f"Worker broker socket not found: {self.broker_socket_path}"
+                ) from error
+            if not stat.S_ISSOCK(socket_stat.st_mode):
+                raise FileNotFoundError(
+                    f"Worker broker path is not a Unix socket: {self.broker_socket_path}"
+                )
+            return
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
             raise FileNotFoundError(f"QEMU executable not found: {self.executable}")
         if not self.rom_directory.is_dir():
@@ -49,13 +64,15 @@ class QemuWorkerConfig:
                 )
 
 
-def _direct_qemu_command(
+def build_qemu_process_command(
     config: QemuWorkerConfig,
     board: BoardProfile,
     flash_path: Path,
     qmp_socket_path: Path | None,
     gdb_socket_path: Path | None,
     trace_enabled: bool,
+    *,
+    seccomp_sandbox_enabled: bool = False,
 ) -> tuple[str, ...]:
     command = [
         str(config.executable),
@@ -63,6 +80,7 @@ def _direct_qemu_command(
         str(config.rom_directory),
         "-M",
         f"esp32s3,board-profile={board.id}",
+        "-no-user-config",
         "-nographic",
         "-nic",
         "none",
@@ -71,6 +89,13 @@ def _direct_qemu_command(
         "-serial",
         "stdio",
     ]
+    if seccomp_sandbox_enabled:
+        command.extend(
+            (
+                "-sandbox",
+                "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
+            )
+        )
     if qmp_socket_path is not None:
         command.extend(("-qmp", f"unix:{qmp_socket_path},server=on,wait=off"))
     if gdb_socket_path is not None:
@@ -170,7 +195,9 @@ def build_qemu_command(
     *,
     trace_enabled: bool = False,
 ) -> tuple[str, ...]:
-    qemu_command = _direct_qemu_command(
+    if config.sandbox_mode is WorkerSandboxMode.OCI_BROKER:
+        raise ValueError("OCI broker workers are launched through the broker protocol")
+    qemu_command = build_qemu_process_command(
         config,
         board,
         flash_path,

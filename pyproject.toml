@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 esp32-s3-simulator = "esp32_s3_simulator.cli:main"
+esp32-s3-worker-broker = "esp32_s3_simulator.worker_broker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/esp32_s3_simulator"]

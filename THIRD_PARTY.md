@@ -26,6 +26,9 @@ updated before a new component or artifact is committed or distributed.
 | Vitest, Testing Library, and jsdom | Versions pinned in `web/package-lock.json` | MIT | Development and test dependencies only | Browser component and protocol-helper tests |
 | Playwright Test | `1.61.1` | Apache-2.0 | Test dependency only; browser binaries are downloaded separately and are not committed | Rendered desktop and portrait browser verification |
 | Bubblewrap | Deployment baseline `0.9.0` | LGPL-2.0-or-later | External host executable; source and binary are not vendored or committed | Per-worker Linux namespace and filesystem containment |
+| Docker Engine rootless mode | Deployment baseline `29.5.2` | Apache-2.0 plus component notices | External host runtime and client; no Docker source or binary is committed | Dedicated unprivileged OCI worker daemon |
+| libseccomp | Operator base-image version, selected through digest-pinned images | LGPL-2.1-or-later | Installed only while building/running the operator-local worker image | QEMU inner syscall sandbox and OCI seccomp enforcement |
+| OCI build/runtime base images | Operator-selected, immutable SHA-256 references | Distribution-specific notices | References are supplied at build time; no base image is committed | Reproducible build toolchain and minimal worker userspace |
 
 ## Boundary rules
 

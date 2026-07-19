@@ -1,4 +1,4 @@
-.PHONY: check foundation lint test web-check web-e2e build-qemu base-conformance sandbox-probe
+.PHONY: check foundation lint test web-check web-e2e build-qemu build-worker-image base-conformance sandbox-probe
 
 BOARD_ID ?= cardputer-adv
 WORKER_SANDBOX ?= direct
@@ -23,6 +23,9 @@ web-e2e:
 
 build-qemu:
 	./scripts/build-qemu.sh
+
+build-worker-image:
+	./scripts/build-worker-image.sh
 
 base-conformance:
 	uv run ./scripts/run-base-conformance.py \

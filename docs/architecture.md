@@ -20,10 +20,13 @@ Browser client
         documented WebSocket/API protocol
              |
 Simulation session service
-  validation, isolation, quotas, recording
+  validation, quotas, recording; no Docker authority
+             |
+Peer-credential-gated worker broker
+  fixed policy only; owns dedicated rootless Docker endpoint
              |
 One emulator worker per active session
-  ESP32-S3 execution and board device models
+  digest-pinned OCI + QEMU; ESP32-S3 and board device models
 ```
 
 The browser protocol should remain engine-neutral so a future open-source
@@ -109,3 +112,8 @@ Do not bundle Espressif ROM binaries until their redistribution terms have been
 verified. Do not copy official M5Stack product artwork; create original device
 visuals and identify profiles as compatible devices without implying
 endorsement.
+
+The private deployment may build an operator-only image from an independently
+reviewed ROM file and expected digest. The public repository and default build
+context do not contain that ROM, and the resulting image must not be published
+until redistribution review is complete.
