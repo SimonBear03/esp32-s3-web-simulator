@@ -38,14 +38,28 @@ exposed directly to the internet without that gateway or equivalent controls.
 ## Production isolation gate
 
 Process resource limits are defense in depth, not a complete hostile-code
-sandbox. Before an internet deployment accepts arbitrary public firmware, the
-worker must also run as a dedicated unprivileged identity inside an isolated
-container or equivalent OS sandbox with:
+sandbox. The service now provides a production Bubblewrap worker mode that:
 
-- a read-only runtime image and a per-session writable scratch filesystem;
-- no host filesystem mounts, credentials, Docker socket, or control-plane
-  access;
-- denied network namespace and outbound traffic;
+- creates new user, PID, IPC, UTS, cgroup, and network namespaces;
+- disables nested user namespaces and drops every effective capability;
+- clears the environment and exposes no host network routes;
+- mounts configured runtime libraries, the QEMU executable directory, and ROM
+  directory read-only;
+- provides a 16 MiB temporary filesystem and binds only the current session
+  directory writable;
+- fails worker readiness closed when the sandbox executable or a configured
+  read-only input is absent.
+
+The owned Cardputer ADV and StickS3 conformance suites pass boot, display,
+input, NVS, reset, debugger, and cleanup inside that boundary. The automated
+denial probe separately verifies zero capabilities, no host routes, hidden host
+paths, a cleared secret-like environment, disabled nested user namespaces, and
+writable private scratch.
+
+Before an internet deployment accepts arbitrary public firmware, the worker
+must use that mode or an equivalent OS sandbox, and the containing service must
+also provide:
+
 - cgroup CPU, memory, process, and wall-clock limits;
 - a minimal syscall/device policy such as seccomp plus AppArmor or an
   equivalent confinement layer;
@@ -53,9 +67,11 @@ container or equivalent OS sandbox with:
 - upload, request, WebSocket, session, and account-level rate limits;
 - structured security logs that never contain firmware or secret values.
 
-The service should fail closed when any required isolation mechanism is absent.
-Until this gate is implemented and validated, the current worker is suitable
-for controlled development and conformance, not anonymous hostile workloads.
+The deployment should fail closed when any required isolation mechanism is
+absent. Direct worker mode is suitable for controlled local development, not
+public hostile workloads. Bubblewrap reduces filesystem, network, capability,
+and cross-session authority but still shares the host kernel; patch management,
+conservative quotas, monitoring, and the outer service sandbox remain required.
 
 ## Data retention
 

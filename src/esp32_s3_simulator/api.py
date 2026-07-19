@@ -126,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ready" if manager.worker_ready else "degraded",
             "native_worker": manager.worker_ready,
+            "worker_sandbox": manager.worker_sandbox_mode,
         }
 
     @app.get("/v1/boards")

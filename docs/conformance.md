@@ -33,6 +33,20 @@ and power checks then continued in the same sessions. Espressif's target does
 not advertise GDB feature XML, so the client fallback for registers 0 through
 83 is pinned to QEMU's own ESP32-S3 register map and covered by a unit test.
 
+The full Cardputer ADV and StickS3 gates were then repeated with
+`--sandbox bubblewrap`. Each QEMU worker ran with new namespaces, no host
+network, all capabilities dropped, nested user namespaces disabled, read-only
+runtime inputs, a 16 MiB temporary filesystem, and only its session directory
+writable. Both runs passed their existing boot, exact framebuffer pixels,
+keyboard/button, IMU/power, NVS, UART, pause/resume, register, memory,
+breakpoint, single-step, reset, and cleanup assertions. The development QEMU
+binary links a temporary build-dependency tree, so that tree was supplied as an
+explicit read-only conformance input; production packaging must instead list
+its immutable dependency directory. `scripts/probe-worker-sandbox.py` also
+confirmed no effective capabilities, no network routes, no configured forbidden
+host paths, no secret-like environment keys, denied nested user namespace
+creation, and a writable private scratch directory.
+
 The pinned worker and owned Cardputer firmware were exercised through the real
 service runner. QMP accepted `input-send-event` for
 an `A` key down/up pair. Firmware polling the emulated TCA8418 FIFO observed

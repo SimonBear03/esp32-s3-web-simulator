@@ -1,6 +1,8 @@
-.PHONY: check foundation lint test web-check web-e2e build-qemu base-conformance
+.PHONY: check foundation lint test web-check web-e2e build-qemu base-conformance sandbox-probe
 
 BOARD_ID ?= cardputer-adv
+WORKER_SANDBOX ?= direct
+BWRAP ?= /usr/bin/bwrap
 
 check: foundation lint test web-check
 
@@ -27,4 +29,9 @@ base-conformance:
 		--qemu "$(QEMU)" \
 		--rom-directory "$(ROMS)" \
 		--firmware "$(FIRMWARE)" \
-		--board-id "$(BOARD_ID)"
+		--board-id "$(BOARD_ID)" \
+		--sandbox "$(WORKER_SANDBOX)" \
+		--sandbox-executable "$(BWRAP)"
+
+sandbox-probe:
+	uv run ./scripts/probe-worker-sandbox.py --sandbox-executable "$(BWRAP)"

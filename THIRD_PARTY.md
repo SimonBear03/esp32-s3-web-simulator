@@ -24,6 +24,7 @@ updated before a new component or artifact is committed or distributed.
 | TypeScript and DefinitelyTyped packages | TypeScript `7.0.2`; types pinned in `web/package-lock.json` | Apache-2.0 and MIT | Pinned npm build dependencies; type declarations are not shipped as browser runtime code | Static browser-client validation |
 | Vitest, Testing Library, and jsdom | Versions pinned in `web/package-lock.json` | MIT | Development and test dependencies only | Browser component and protocol-helper tests |
 | Playwright Test | `1.61.1` | Apache-2.0 | Test dependency only; browser binaries are downloaded separately and are not committed | Rendered desktop and portrait browser verification |
+| Bubblewrap | Deployment baseline `0.9.0` | LGPL-2.0-or-later | External host executable; source and binary are not vendored or committed | Per-worker Linux namespace and filesystem containment |
 
 ## Boundary rules
 

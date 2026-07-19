@@ -107,10 +107,25 @@ class SessionManager:
 
     @property
     def worker_ready(self) -> bool:
-        return (
-            self._settings.native_workers_enabled
-            and self._settings.qemu_executable.is_file()
-            and self._settings.rom_directory.is_dir()
+        if not self._settings.native_workers_enabled:
+            return False
+        try:
+            self._worker_config().validate()
+        except FileNotFoundError:
+            return False
+        return True
+
+    @property
+    def worker_sandbox_mode(self) -> str:
+        return self._settings.worker_sandbox_mode.value
+
+    def _worker_config(self) -> QemuWorkerConfig:
+        return QemuWorkerConfig(
+            executable=self._settings.qemu_executable,
+            rom_directory=self._settings.rom_directory,
+            sandbox_mode=self._settings.worker_sandbox_mode,
+            sandbox_executable=self._settings.worker_sandbox_executable,
+            sandbox_readonly_paths=self._settings.worker_sandbox_readonly_paths,
         )
 
     async def start(self) -> None:
@@ -449,10 +464,7 @@ class SessionManager:
             session.subscribers.discard(queue)
 
     async def _launch(self, session: SessionRecord) -> None:
-        worker_config = QemuWorkerConfig(
-            executable=self._settings.qemu_executable,
-            rom_directory=self._settings.rom_directory,
-        )
+        worker_config = self._worker_config()
         worker_config.validate()
         command = build_qemu_command(
             worker_config,

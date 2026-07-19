@@ -40,6 +40,7 @@ async def test_health_and_board_contract(tmp_path: Path) -> None:
         assert (await client.get("/health/ready")).json() == {
             "status": "degraded",
             "native_worker": False,
+            "worker_sandbox": "direct",
         }
 
         boards = (await client.get("/v1/boards")).json()

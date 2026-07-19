@@ -36,6 +36,15 @@ that prohibit local socket binding; it is not a production configuration.
 operations; debugging also requires QMP so run state can remain synchronized.
 Neither private socket is part of the public protocol.
 
+`GET /health/ready` reports `status`, `native_worker`, and
+`worker_sandbox` (`direct` or `bubblewrap`). Production sets
+`SIMULATOR_WORKER_SANDBOX_MODE=bubblewrap`; readiness degrades if the configured
+Bubblewrap executable or any required read-only runtime path is missing.
+`SIMULATOR_WORKER_SANDBOX_READONLY_PATHS` is a colon-separated allow-list for
+the dynamic runtime and packaged QEMU dependencies. The worker executable
+directory and ROM directory are added automatically, while only the current
+session directory is writable.
+
 ## Session state
 
 - `GET /v1/sessions/{id}` returns current state.

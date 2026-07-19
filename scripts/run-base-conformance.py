@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from esp32_s3_simulator.boards import get_board_profile
+from esp32_s3_simulator.qemu import DEFAULT_SANDBOX_READONLY_PATHS, WorkerSandboxMode
 from esp32_s3_simulator.sessions import SessionManager, SessionRecord, SessionState
 from esp32_s3_simulator.settings import Settings
 
@@ -17,6 +18,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rom-directory", type=Path, required=True)
     parser.add_argument("--firmware", type=Path, required=True)
     parser.add_argument("--board-id", default="cardputer-adv")
+    parser.add_argument(
+        "--sandbox",
+        choices=[mode.value for mode in WorkerSandboxMode],
+        default=WorkerSandboxMode.DIRECT.value,
+        help="native worker containment mode",
+    )
+    parser.add_argument(
+        "--sandbox-executable",
+        type=Path,
+        default=Path("/usr/bin/bwrap"),
+    )
+    parser.add_argument(
+        "--sandbox-readonly-path",
+        action="append",
+        dest="sandbox_readonly_paths",
+        type=Path,
+        help="additional read-only path set (repeat; replaces the default set)",
+    )
     parser.add_argument(
         "--qmp",
         action=argparse.BooleanOptionalAction,
@@ -56,6 +75,13 @@ async def run(args: argparse.Namespace) -> None:
             native_workers_enabled=True,
             worker_qmp_enabled=args.qmp,
             worker_debug_enabled=args.qmp,
+            worker_sandbox_mode=WorkerSandboxMode(args.sandbox),
+            worker_sandbox_executable=args.sandbox_executable.resolve(),
+            worker_sandbox_readonly_paths=(
+                tuple(path.absolute() for path in args.sandbox_readonly_paths)
+                if args.sandbox_readonly_paths
+                else DEFAULT_SANDBOX_READONLY_PATHS
+            ),
             session_ttl_seconds=30,
             worker_memory_limit_mib=1536,
             worker_cpu_limit_seconds=20,

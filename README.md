@@ -33,7 +33,11 @@ streams, virtual device inputs, deterministic sensor/power controls, and the
 bounded debugger on desktop and portrait layouts. The debugger
 supports synchronized pause/resume, Xtensa register snapshots, memory reads,
 hardware breakpoints, and single-step on both profiles. QEMU's raw GDB socket
-remains private to each worker and is never proxied to a browser.
+remains private to each worker and is never proxied to a browser. Production
+workers can now run inside a Bubblewrap boundary with new namespaces, no host
+network, no capabilities, read-only runtime inputs, a bounded temporary
+filesystem, and one writable session directory. Both board conformance suites
+pass through that boundary.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. A successful first
@@ -102,6 +106,17 @@ The QEMU worker still requires the pinned emulator binary and ROM configuration
 described in [emulator/qemu/README.md](emulator/qemu/README.md). The versioned
 browser/service contract is documented in
 [docs/protocol.md](docs/protocol.md).
+
+Production deployments set `SIMULATOR_WORKER_SANDBOX_MODE=bubblewrap` and run
+the denial probe before accepting firmware:
+
+```sh
+UV_CACHE_DIR=/tmp/esp32-s3-uv-cache make sandbox-probe
+```
+
+Direct worker mode remains the local-development default. A public deployment
+must additionally use the authenticated ownership gateway and hardened service
+configuration described in [docs/security.md](docs/security.md).
 
 ## Remote
 

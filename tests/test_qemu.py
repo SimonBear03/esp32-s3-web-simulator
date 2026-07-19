@@ -2,8 +2,14 @@
 
 from pathlib import Path
 
+import pytest
+
 from esp32_s3_simulator.boards import CARDPUTER_ADV, STICKS3
-from esp32_s3_simulator.qemu import QemuWorkerConfig, build_qemu_command
+from esp32_s3_simulator.qemu import (
+    QemuWorkerConfig,
+    WorkerSandboxMode,
+    build_qemu_command,
+)
 
 
 def command_for(board_id: str) -> tuple[str, ...]:
@@ -53,3 +59,51 @@ def test_qmp_can_be_disabled_for_restricted_test_sandboxes() -> None:
     )
     assert "-qmp" not in command
     assert "-gdb" not in command
+
+
+def test_bubblewrap_worker_gets_private_namespaces_and_one_writable_session() -> None:
+    command = build_qemu_command(
+        QemuWorkerConfig(
+            Path("/opt/simulator/bin/qemu-system-xtensa"),
+            Path("/opt/simulator/share/qemu"),
+            sandbox_mode=WorkerSandboxMode.BUBBLEWRAP,
+            sandbox_executable=Path("/usr/bin/bwrap"),
+        ),
+        CARDPUTER_ADV,
+        Path("/run/esp32-s3/session/flash.bin"),
+        Path("/run/esp32-s3/session/qmp.sock"),
+        Path("/run/esp32-s3/session/gdb.sock"),
+    )
+
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--unshare-all" in command
+    assert "--unshare-user" in command
+    assert "--disable-userns" in command
+    assert command[command.index("--cap-drop") + 1] == "ALL"
+    assert command[command.index("--hostname") + 1] == "esp32-s3-worker"
+    assert "--die-with-parent" in command
+    assert "--clearenv" in command
+    assert "--share-net" not in command
+    writable_index = command.index("--bind")
+    assert command[writable_index + 1 : writable_index + 3] == (
+        "/run/esp32-s3/session",
+        "/run/esp32-s3/session",
+    )
+    qemu_index = command.index("--") + 1
+    assert command[qemu_index] == "/opt/simulator/bin/qemu-system-xtensa"
+    assert command[command.index("-nic", qemu_index) + 1] == "none"
+
+
+def test_worker_rejects_control_sockets_outside_its_session_directory() -> None:
+    with pytest.raises(ValueError, match="share one session directory"):
+        build_qemu_command(
+            QemuWorkerConfig(
+                Path("/opt/qemu"),
+                Path("/opt/roms"),
+                sandbox_mode=WorkerSandboxMode.BUBBLEWRAP,
+            ),
+            CARDPUTER_ADV,
+            Path("/runtime/session/flash.bin"),
+            Path("/runtime/other/qmp.sock"),
+            None,
+        )
