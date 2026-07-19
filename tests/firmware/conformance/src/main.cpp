@@ -38,6 +38,12 @@ uint32_t lastStickTelemetryAt = 0;
 TwoWire boardWire(1);
 constexpr uint8_t kBacklightPin = 38;
 constexpr uint8_t kBacklightChannel = 7;
+constexpr uint8_t kBmi270Address = 0x68;
+constexpr uint8_t kBatteryAdcPin = 10;
+int16_t lastMotion[6] = {};
+uint16_t lastBatteryMv = 0;
+bool cardputerTelemetryReady = false;
+uint32_t lastCardputerTelemetryAt = 0;
 #endif
 
 constexpr uint8_t kTca8418Address = 0x34;
@@ -143,7 +149,6 @@ void readTca8418Events() {
   }
 }
 
-#if SIMULATOR_STICKS3
 bool writeI2cRegister(uint8_t address, uint8_t reg, uint8_t value) {
   boardWire.beginTransmission(address);
   boardWire.write(reg);
@@ -172,6 +177,32 @@ uint16_t littleEndianWord(const uint8_t *bytes) {
          (static_cast<uint16_t>(bytes[1]) << 8);
 }
 
+bool configureBmi270() {
+  uint8_t chipId = 0;
+  const bool ready =
+      readI2cRegisters(kBmi270Address, 0x00, &chipId, 1) && chipId == 0x24 &&
+      writeI2cRegister(kBmi270Address, 0x41, 0x02) &&
+      writeI2cRegister(kBmi270Address, 0x43, 0x00);
+  Serial.printf("SIM:BMI270 address=0x%02x chip_id=0x%02x ready=%u\n",
+                kBmi270Address, chipId, ready);
+  return ready;
+}
+
+bool readBmi270Sample(int16_t *motion) {
+  uint8_t motionBytes[12];
+  if (!readI2cRegisters(kBmi270Address, 0x0C, motionBytes,
+                        sizeof(motionBytes))) {
+    return false;
+  }
+  for (size_t index = 0; index < 6; index++) {
+    motion[index] = static_cast<int16_t>(
+        littleEndianWord(motionBytes + index * 2));
+  }
+  return true;
+}
+
+#if SIMULATOR_STICKS3
+
 void configureStickPeripherals() {
   boardWire.begin(kInternalSdaPin, kInternalSclPin, 400000);
   pinMode(kButtonAPin, INPUT_PULLUP);
@@ -181,13 +212,7 @@ void configureStickPeripherals() {
   Serial.printf("SIM:BUTTONS a_gpio=%u b_gpio=%u active=low\n", kButtonAPin,
                 kButtonBPin);
 
-  uint8_t chipId = 0;
-  const bool bmiReady =
-      readI2cRegisters(kBmi270Address, 0x00, &chipId, 1) && chipId == 0x24 &&
-      writeI2cRegister(kBmi270Address, 0x41, 0x02) &&
-      writeI2cRegister(kBmi270Address, 0x43, 0x00);
-  Serial.printf("SIM:BMI270 address=0x%02x chip_id=0x%02x ready=%u\n",
-                kBmi270Address, chipId, bmiReady);
+  configureBmi270();
 
   uint8_t pmicId = 0;
   const bool pmicReady =
@@ -216,14 +241,8 @@ void readStickTelemetry() {
   }
   lastStickTelemetryAt = now;
 
-  uint8_t motionBytes[12];
   int16_t motion[6];
-  if (readI2cRegisters(kBmi270Address, 0x0C, motionBytes,
-                       sizeof(motionBytes))) {
-    for (size_t index = 0; index < 6; index++) {
-      motion[index] = static_cast<int16_t>(littleEndianWord(
-          motionBytes + index * 2));
-    }
+  if (readBmi270Sample(motion)) {
     if (!stickTelemetryReady ||
         memcmp(motion, lastMotion, sizeof(motion)) != 0) {
       memcpy(lastMotion, motion, sizeof(motion));
@@ -255,6 +274,44 @@ void readStickTelemetry() {
     }
   }
   stickTelemetryReady = true;
+}
+#endif
+
+#if !SIMULATOR_STICKS3
+void configureCardputerPeripherals() {
+  configureBmi270();
+  analogReadResolution(12);
+  analogSetPinAttenuation(kBatteryAdcPin, ADC_11db);
+  Serial.printf("SIM:BATTERY_ADC gpio=%u unit=1 channel=9 ratio=2.0\n",
+                kBatteryAdcPin);
+}
+
+void readCardputerTelemetry() {
+  const uint32_t now = millis();
+  if (cardputerTelemetryReady && now - lastCardputerTelemetryAt < 50) {
+    return;
+  }
+  lastCardputerTelemetryAt = now;
+
+  int16_t motion[6];
+  if (readBmi270Sample(motion) &&
+      (!cardputerTelemetryReady ||
+       memcmp(motion, lastMotion, sizeof(motion)) != 0)) {
+    memcpy(lastMotion, motion, sizeof(motion));
+    Serial.printf("SIM:IMU_RAW ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
+                  motion[0], motion[1], motion[2], motion[3], motion[4],
+                  motion[5]);
+  }
+
+  const uint16_t batteryMv = analogReadMilliVolts(kBatteryAdcPin) * 2;
+  const uint16_t raw = analogRead(kBatteryAdcPin);
+  if (!cardputerTelemetryReady || batteryMv != lastBatteryMv) {
+    lastBatteryMv = batteryMv;
+    Serial.printf(
+        "SIM:POWER battery_mv=%u adc_raw=%u source=adc charging=unavailable\n",
+        batteryMv, raw);
+  }
+  cardputerTelemetryReady = true;
 }
 #endif
 
@@ -465,6 +522,7 @@ void setup() {
   delay(50);
 #if !SIMULATOR_STICKS3
   configureTca8418();
+  configureCardputerPeripherals();
   if (!configureBacklight()) {
     Serial.println("SIM:LEDC unavailable");
   }
@@ -486,6 +544,7 @@ void loop() {
   readCommands();
 #if !SIMULATOR_STICKS3
   readTca8418Events();
+  readCardputerTelemetry();
 #else
   readStickButtons();
   readStickTelemetry();

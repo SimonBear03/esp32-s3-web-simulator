@@ -42,3 +42,10 @@ Do not submit code copied from a firmware repository merely because that
 firmware is used as a conformance application. Board behavior should be
 implemented from public specifications, clean-room observations, and
 appropriately licensed upstream code.
+
+Firmware libraries and vendor SDKs may be used as black-box conformance inputs
+or to confirm public, firmware-visible behavior. Their implementation code must
+not be copied into a QEMU patch unless its licence is explicitly compatible and
+the provenance is recorded. The Cardputer ADV SAR ADC model is an independent
+behavioral implementation based on public register/API behavior and observed
+fixture results; it does not incorporate ESP-IDF or M5Unified source code.

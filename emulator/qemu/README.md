@@ -57,6 +57,13 @@ pins from being forced low while allowing matrix-routed outputs such as the
 Cardputer ADV display D/C signal on GPIO34 to transition after M5GFX clears
 the software GPIO-enable bit.
 
+`patches/0009-esp32s3-cardputer-adv-imu-adc.patch` attaches the Cardputer ADV
+BMI270 at I2C address `0x68` and implements the RTC-controller one-shot ADC1
+path used by M5Unified on GPIO10. The worker injects the battery-divider input
+through a bounded QOM property; firmware still performs a normal ADC read and
+calibration. The behavioral model does not claim electrical noise, per-chip
+calibration, charging state, current draw, or brownout fidelity.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:

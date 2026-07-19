@@ -1107,6 +1107,10 @@ output {
   border-color: var(--accent);
 }
 
+.motion-input-title {
+  margin-top: 24px;
+}
+
 .button-inputs {
   display: grid;
   gap: 7px;

@@ -62,6 +62,28 @@ def test_sticks3_sensor_and_power_inputs_use_private_qom_properties() -> None:
         "value": "3700,0,0",
     }
 
+
+def test_cardputer_sensor_and_adc_battery_inputs_use_board_qom_properties() -> None:
+    assert qmp_imu_sample(
+        CARDPUTER_ADV, (0.0, -1.0, 0.5), (12.0, 0.0, -250.0)
+    ) == {
+        "path": "/machine/peripheral/cardputer-adv-imu",
+        "property": "sample",
+        "value": "0,-1000,500,12000,0,-250000",
+    }
+    assert qmp_power_state(CARDPUTER_ADV, 3700, 0, False) == {
+        "path": "/machine/soc/saradc",
+        "property": "adc1-ch9-millivolts",
+        "value": 1850,
+    }
+
+
+def test_cardputer_power_rejects_telemetry_the_hardware_cannot_report() -> None:
+    with pytest.raises(BoardInputError, match="battery voltage only"):
+        qmp_power_state(CARDPUTER_ADV, 3900, 5000, True)
+
+
+def test_sensor_and_power_values_are_range_checked() -> None:
     with pytest.raises(BoardInputError, match="16 g"):
         qmp_imu_sample(STICKS3, (17.0, 0.0, 0.0), (0.0, 0.0, 0.0))
     with pytest.raises(BoardInputError, match="6000 mV"):

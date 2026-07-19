@@ -26,54 +26,64 @@ export function InputInspector({
 }: InputInspectorProps) {
   const [imu, setImu] = useState<ImuSample>(INITIAL_IMU);
 
-  if (boardId === "cardputer-adv") {
-    return (
-      <div className="inspector-section input-overview">
-        <div className="inspector-title">
-          <Keyboard size={17} />
-          <span>Keyboard matrix</span>
-        </div>
-        <p>
-          Click the virtual keys or type while the device stage is focused. Key
-          transitions enter the emulated TCA8418 FIFO and GPIO interrupt path.
-        </p>
-        <div className="signal-path" aria-label="Keyboard emulation signal path">
-          <span>Browser key</span>
-          <i aria-hidden="true" />
-          <span>TCA8418</span>
-          <i aria-hidden="true" />
-          <span>GPIO 11</span>
-        </div>
-        <div className="inspector-note" data-active={enabled}>
-          {enabled ? "Keyboard input connected" : "Run a session to send keys"}
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="inspector-section">
-      <div className="inspector-title">
-        <Activity size={17} />
-        <span>Runtime inputs</span>
-      </div>
-      <div className="button-inputs">
-        {(["a", "b"] as const).map((button) => (
-          <div key={button}>
-            <span>Button {button.toUpperCase()}</span>
-            <button
-              className="secondary-button"
-              disabled={!enabled}
-              onPointerCancel={() => onButton(button, false)}
-              onPointerDown={() => onButton(button, true)}
-              onPointerUp={() => onButton(button, false)}
-              type="button"
-            >
-              Press
-            </button>
+    <div
+      className={`inspector-section${
+        boardId === "cardputer-adv" ? " input-overview" : ""
+      }`}
+    >
+      {boardId === "cardputer-adv" ? (
+        <>
+          <div className="inspector-title">
+            <Keyboard size={17} />
+            <span>Keyboard matrix</span>
           </div>
-        ))}
-      </div>
+          <p>
+            Click the virtual keys or type while the device stage is focused. Key
+            transitions enter the emulated TCA8418 FIFO and GPIO interrupt path.
+          </p>
+          <div className="signal-path" aria-label="Keyboard emulation signal path">
+            <span>Browser key</span>
+            <i aria-hidden="true" />
+            <span>TCA8418</span>
+            <i aria-hidden="true" />
+            <span>GPIO 11</span>
+          </div>
+          <div className="inspector-note" data-active={enabled}>
+            {enabled ? "Keyboard input connected" : "Run a session to send keys"}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="inspector-title">
+            <Activity size={17} />
+            <span>Runtime inputs</span>
+          </div>
+          <div className="button-inputs">
+            {(["a", "b"] as const).map((button) => (
+              <div key={button}>
+                <span>Button {button.toUpperCase()}</span>
+                <button
+                  className="secondary-button"
+                  disabled={!enabled}
+                  onPointerCancel={() => onButton(button, false)}
+                  onPointerDown={() => onButton(button, true)}
+                  onPointerUp={() => onButton(button, false)}
+                  type="button"
+                >
+                  Press
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {boardId === "cardputer-adv" ? (
+        <div className="inspector-title motion-input-title">
+          <Activity size={17} />
+          <span>BMI270 motion</span>
+        </div>
+      ) : null}
       <VectorFields
         disabled={!enabled}
         legend="Acceleration"
@@ -105,7 +115,9 @@ export function InputInspector({
         <Activity size={15} />
         Apply sample
       </button>
-      <p className="field-help">Physical-unit samples are clamped to ±16 g and ±2000 dps.</p>
+      <p className="field-help">
+        BMI270 samples use physical units and are clamped to ±16 g and ±2000 dps.
+      </p>
     </div>
   );
 }

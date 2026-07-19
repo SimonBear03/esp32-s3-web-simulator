@@ -103,7 +103,7 @@ accepts the event. Invalid, unsupported, or unavailable inputs produce a typed
 These are board-level identifiers. QEMU key names and the Cardputer matrix
 encoding are private worker details.
 
-StickS3 has three additional event types:
+The profiles accept these additional event types:
 
 ```json
 {"type":"button","button":"a","pressed":true,"sequence":18}
@@ -111,12 +111,18 @@ StickS3 has three additional event types:
 {"type":"power","battery_mv":3900,"vin_mv":5000,"charging":true,"sequence":20}
 ```
 
-Buttons `a` and `b` map to the board's active-low GPIO 11 and 12 inputs. IMU
-values are finite physical units bounded to 16 g and 2000 dps; the behavioral
-BMI270 converts them according to firmware-selected range registers. Power
-values are bounded to 0–6000 mV and are exposed through the behavioral M5PM1
-register model. An acknowledgement means QEMU accepted the transition, not
-that real hardware behavior has been certified.
+Buttons `a` and `b` are StickS3-only and map to its active-low GPIO 11 and 12
+inputs. Both profiles accept finite IMU units bounded to 16 g and 2000 dps;
+their behavioral BMI270 converts samples according to firmware-selected range
+registers. StickS3 power values are bounded to 0–6000 mV and reach firmware
+through behavioral M5PM1 registers.
+
+Cardputer ADV also accepts `power`, but only `battery_mv` represents real
+hardware telemetry; clients must send `vin_mv: 0` and `charging: false` because
+the board exposes neither value. The worker applies the physical 2:1 divider
+and firmware reads the result through ADC1 channel 9 on GPIO10. An
+acknowledgement means QEMU accepted the transition, not that analog or
+electrical behavior has been certified.
 
 ## Debugger
 
@@ -147,6 +153,5 @@ or debug status until the later event-stream protocol is implemented.
 
 ## Pending protocol surfaces
 
-Deterministic peripheral traces and Cardputer ADV power events remain pending.
-They are not represented as fake-success endpoints until their worker
-implementations exist.
+Deterministic peripheral traces remain pending. They are not represented as
+fake-success endpoints until their worker implementations exist.

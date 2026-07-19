@@ -11,9 +11,9 @@ The base fixture lives at `tests/firmware/conformance/`. Board-specific
 fixtures will build on its stable `SIM:` UART contract.
 
 The 2026-07-19 two-profile fixture produced unpadded merged-image SHA-256
-`2095d588cd9f83ee2d479ac3ea9e0fcb0ba33302897918e4e67cdce47d6ab74b`
+`fca5adb5dc4fc66097379e7d5c0ecad7331f93b3373a39cdbc6e4d4b826b160f`
 for Cardputer ADV and
-`5a128f26a653e77d738860bfd236710975f502715a75be15bd2f3e6ddb826e16`
+`25d201b87156991becc7fb168b642dd63fb56d5cbe803e5c337a0083a4024b04`
 for StickS3.
 The service conformance runner observed TCA8418 configuration at I2C address
 `0x34`, ESP-IDF `CHANGE` interrupt registration on GPIO 11, three heartbeats,
@@ -93,6 +93,18 @@ X and 250 dps Z. The same run read default M5PM1 telemetry of 3900 mV battery,
 charging-off state. Both values persisted as environmental state across QMP
 and firmware resets while NVS advanced exactly from boot 1 to 3. Cardputer ADV
 then passed its full keyboard/display/NVS regression gate with the same worker.
+
+Patch 0009 attaches a separate behavioral BMI270 to the Cardputer ADV internal
+I2C bus and adds the ESP32-S3 RTC-controller ADC1 path used by the board's
+GPIO10 battery divider. The owned firmware identified BMI270 chip ID `0x24`,
+read the default stationary sample `(0,0,4096)`, and read an injected 1 g X /
+250 dps Z sample as `(4096,0,0)` and `(0,0,4096)`. Its normal ADC API reported
+the default model as 3898 mV battery / raw 2107, then a 3700 mV injected battery
+as 3704 mV / raw 2001. Firmware reports charging as unavailable, matching the
+physical Cardputer ADV API instead of inventing VIN or charge-status telemetry.
+The model uses an independently implemented behavioral transfer approximation
+and nominal calibration eFuse state; no ESP-IDF or M5Stack source is copied into
+the GPL patch.
 
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.
@@ -229,6 +241,17 @@ the keyboard, and returned to setup with framebuffer SHA-256
 This completes the application-level boot, NVS, display, keyboard, embedded
 search, checkmate, game-over, and new-game compatibility milestone without
 modifying or redistributing the application firmware.
+
+After patch 0009 added Cardputer ADV IMU and ADC behavior, the same unmodified
+image was rerun as a regression gate inside Bubblewrap. Its saved-level frame
+again matched exactly before and after QMP reset. A fresh legal game completed
+in 29 plies (`1. e4 c5 2. Nf3 Nc6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 Ng8 6. Be3
+Na5 7. Ndb5 b6 8. Nd5 f6 9. Ndc7+ Kf7 10. Qd5+ e6 11. Nxe6 Bb4+ 12. c3 Bf8
+13. Nxd8+ Ke7 14. Qf7+ Kxd8 15. Qxf8#`). The worker remained running at
+checkmate, produced game-over framebuffer SHA-256
+`673a007bebfec152a568a5957fdd4625626ce701dc7776215649a51684cc210a`,
+and returned to the same setup frame after Enter. This confirms the added
+devices and nominal eFuse calibration do not regress the complete Chess path.
 
 ## Evidence rules
 

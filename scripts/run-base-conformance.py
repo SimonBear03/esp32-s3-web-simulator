@@ -97,6 +97,20 @@ async def run(args: argparse.Namespace) -> None:
                     session,
                     "SIM:LEDC channel=7 pin=38 frequency=256 duty=110 configured=1",
                 )
+                await wait_for_text(
+                    session, "SIM:BMI270 address=0x68 chip_id=0x24 ready=1"
+                )
+                await wait_for_text(
+                    session, "SIM:BATTERY_ADC gpio=10 unit=1 channel=9 ratio=2.0"
+                )
+                await wait_for_text(
+                    session, "SIM:IMU_RAW ax=0 ay=0 az=4096 gx=0 gy=0 gz=0"
+                )
+                await wait_for_text(
+                    session,
+                    "SIM:POWER battery_mv=3898 adc_raw=2107 "
+                    "source=adc charging=unavailable",
+                )
             else:
                 await wait_for_text(session, "SIM:PSRAM bytes=8388608 test=pass")
                 await wait_for_text(
@@ -190,6 +204,21 @@ async def run(args: argparse.Namespace) -> None:
                         await manager.send_key(session.id, key, False)
                         await wait_for_text(session, f"SIM:KEY raw=0x{raw_code | 0x80:02x}")
                         await wait_for_text(session, f"SIM:KEY raw=0x{raw_code:02x}")
+                    await manager.set_imu_sample(
+                        session.id, (1.0, 0.0, 0.0), (0.0, 0.0, 250.0)
+                    )
+                    await wait_for_text(
+                        session,
+                        "SIM:IMU_RAW ax=4096 ay=0 az=0 gx=0 gy=0 gz=4096",
+                    )
+                    await manager.set_power_state(
+                        session.id, battery_mv=3700, vin_mv=0, charging=False
+                    )
+                    await wait_for_text(
+                        session,
+                        "SIM:POWER battery_mv=3704 adc_raw=2001 "
+                        "source=adc charging=unavailable",
+                    )
                 else:
                     await manager.send_button(session.id, "a", True)
                     await wait_for_text(session, "SIM:BUTTON id=a pressed=1")

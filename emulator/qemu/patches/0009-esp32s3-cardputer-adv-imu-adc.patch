@@ -1,0 +1,379 @@
+From 0000000000000000000000000000000000000009 Mon Sep 17 00:00:00 2001
+From: ESP32-S3 Web Simulator contributors <noreply@example.com>
+Date: Sun, 19 Jul 2026 19:00:00 +0800
+Subject: [PATCH 9/9] esp32s3: model Cardputer ADV IMU and battery ADC
+
+Attach the Cardputer ADV BMI270 to its internal I2C bus and add the
+ESP32-S3 RTC one-shot SAR ADC path used to sample the GPIO10 battery
+divider. Expose the ADC input through QOM so the worker can inject
+deterministic battery voltage through the normal firmware path.
+---
+ hw/adc/Kconfig                    |   3 +
+ hw/adc/esp32s3_saradc.c           | 210 ++++++++++++++++++++++++++++++
+ hw/adc/meson.build                |   1 +
+ hw/nvram/esp32s3_efuse.c          |   9 ++
+ hw/xtensa/Kconfig                 |   1 +
+ hw/xtensa/esp32s3.c               |  18 +++
+ include/hw/adc/esp32s3_saradc.h   |  30 +++++
+ 7 files changed, 272 insertions(+)
+
+diff --git a/hw/adc/Kconfig b/hw/adc/Kconfig
+index 25d2229fb83b25cac03b49ef56e4aa0ae1af1190..2efad6f1be6558e2d9b71cf7ef916137866bfd5f 100644
+--- a/hw/adc/Kconfig
++++ b/hw/adc/Kconfig
+@@ -1,2 +1,5 @@
+ config STM32F2XX_ADC
+     bool
++
++config ESP32S3_SARADC
++    bool
+diff --git a/hw/adc/esp32s3_saradc.c b/hw/adc/esp32s3_saradc.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..3816962884e28614c6b88ddbd36975adb9c26f73
+--- /dev/null
++++ b/hw/adc/esp32s3_saradc.c
+@@ -0,0 +1,210 @@
++/*
++ * ESP32-S3 SAR ADC behavioral model
++ *
++ * Copyright (c) 2026 Simon Yu
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 or
++ * (at your option) any later version.
++ *
++ * The initial model covers RTC-controller one-shot ADC1 conversions. This is
++ * the path used by M5Unified to sample the Cardputer ADV battery divider on
++ * ADC1 channel 9 (GPIO10). Other channels return zero until they are modeled.
++ */
++
++#include "qemu/osdep.h"
++#include "hw/adc/esp32s3_saradc.h"
++#include "migration/vmstate.h"
++#include "qemu/module.h"
++#include "qemu/units.h"
++
++#define ESP32S3_SARADC_SENS_CTRL2 0x0c
++#define ESP32S3_SARADC_SENS_ATTEN1 0x14
++#define ESP32S3_SARADC_APB_ADC1_DATA_STATUS 0x40
++
++#define ESP32S3_SARADC_EN_PAD_SHIFT 19
++#define ESP32S3_SARADC_EN_PAD_MASK (0xfffU << ESP32S3_SARADC_EN_PAD_SHIFT)
++#define ESP32S3_SARADC_START BIT(17)
++#define ESP32S3_SARADC_DONE BIT(16)
++#define ESP32S3_SARADC_DATA_MASK 0xffffU
++#define ESP32S3_SARADC_MAX_RAW 4095U
++
++static unsigned esp32s3_saradc_selected_channel(uint32_t ctrl2)
++{
++    uint32_t bitmap = (ctrl2 & ESP32S3_SARADC_EN_PAD_MASK) >>
++                      ESP32S3_SARADC_EN_PAD_SHIFT;
++
++    return bitmap ? ctz32(bitmap) : 0;
++}
++
++static uint16_t esp32s3_saradc_convert_adc1(Esp32s3SarAdcState *s,
++                                             unsigned channel)
++{
++    uint32_t raw;
++
++    if (channel != 9) {
++        return 0;
++    }
++
++    /*
++     * Approximate the ESP32-S3 ADC1 attenuation-3 transfer curve around the
++     * Li-ion range. The virtual chip exposes calibration eFuses, so Espressif's
++     * firmware calibration path converts this raw value back to millivolts.
++     */
++    raw = ((uint32_t)s->adc1_ch9_millivolts + 40U) * 900U / 850U;
++    return MIN(raw, ESP32S3_SARADC_MAX_RAW);
++}
++
++static void esp32s3_saradc_start_adc1(Esp32s3SarAdcState *s)
++{
++    uint32_t *ctrl2 = &s->sens_registers[ESP32S3_SARADC_SENS_CTRL2 / 4];
++    uint16_t raw = esp32s3_saradc_convert_adc1(
++        s, esp32s3_saradc_selected_channel(*ctrl2));
++
++    *ctrl2 = (*ctrl2 & ~ESP32S3_SARADC_DATA_MASK) |
++             ESP32S3_SARADC_DONE | raw;
++    s->apb_registers[ESP32S3_SARADC_APB_ADC1_DATA_STATUS / 4] = raw;
++}
++
++static uint64_t esp32s3_saradc_read_register(uint32_t *registers,
++                                              hwaddr offset)
++{
++    if (offset >= ESP32S3_SARADC_REGISTER_WORDS * sizeof(uint32_t)) {
++        return 0;
++    }
++    return registers[offset / sizeof(uint32_t)];
++}
++
++static void esp32s3_saradc_write_register(uint32_t *registers,
++                                           hwaddr offset, uint64_t value)
++{
++    if (offset < ESP32S3_SARADC_REGISTER_WORDS * sizeof(uint32_t)) {
++        registers[offset / sizeof(uint32_t)] = (uint32_t)value;
++    }
++}
++
++static uint64_t esp32s3_saradc_sens_read(void *opaque, hwaddr offset,
++                                         unsigned size)
++{
++    Esp32s3SarAdcState *s = opaque;
++
++    return esp32s3_saradc_read_register(s->sens_registers, offset);
++}
++
++static void esp32s3_saradc_sens_write(void *opaque, hwaddr offset,
++                                      uint64_t value, unsigned size)
++{
++    Esp32s3SarAdcState *s = opaque;
++    uint32_t previous = esp32s3_saradc_read_register(s->sens_registers,
++                                                      offset);
++
++    esp32s3_saradc_write_register(s->sens_registers, offset, value);
++    if (offset == ESP32S3_SARADC_SENS_CTRL2 &&
++        !(previous & ESP32S3_SARADC_START) &&
++        (value & ESP32S3_SARADC_START)) {
++        esp32s3_saradc_start_adc1(s);
++    }
++}
++
++static uint64_t esp32s3_saradc_apb_read(void *opaque, hwaddr offset,
++                                        unsigned size)
++{
++    Esp32s3SarAdcState *s = opaque;
++
++    return esp32s3_saradc_read_register(s->apb_registers, offset);
++}
++
++static void esp32s3_saradc_apb_write(void *opaque, hwaddr offset,
++                                     uint64_t value, unsigned size)
++{
++    Esp32s3SarAdcState *s = opaque;
++
++    esp32s3_saradc_write_register(s->apb_registers, offset, value);
++}
++
++static const MemoryRegionOps esp32s3_saradc_sens_ops = {
++    .read = esp32s3_saradc_sens_read,
++    .write = esp32s3_saradc_sens_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 4,
++        .max_access_size = 4,
++        .unaligned = false,
++    },
++};
++
++static const MemoryRegionOps esp32s3_saradc_apb_ops = {
++    .read = esp32s3_saradc_apb_read,
++    .write = esp32s3_saradc_apb_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 4,
++        .max_access_size = 4,
++        .unaligned = false,
++    },
++};
++
++static void esp32s3_saradc_reset(DeviceState *dev)
++{
++    Esp32s3SarAdcState *s = ESP32S3_SARADC(dev);
++
++    memset(s->sens_registers, 0, sizeof(s->sens_registers));
++    memset(s->apb_registers, 0, sizeof(s->apb_registers));
++    s->sens_registers[0] = BIT(29) | BIT(18) | 2;
++    s->sens_registers[ESP32S3_SARADC_SENS_ATTEN1 / 4] = UINT32_MAX;
++}
++
++static void esp32s3_saradc_init(Object *obj)
++{
++    Esp32s3SarAdcState *s = ESP32S3_SARADC(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++
++    memory_region_init_io(&s->sens_iomem, obj, &esp32s3_saradc_sens_ops, s,
++                          TYPE_ESP32S3_SARADC ".sens", 4 * KiB);
++    sysbus_init_mmio(sbd, &s->sens_iomem);
++    memory_region_init_io(&s->apb_iomem, obj, &esp32s3_saradc_apb_ops, s,
++                          TYPE_ESP32S3_SARADC ".apb", 4 * KiB);
++    sysbus_init_mmio(sbd, &s->apb_iomem);
++    object_property_add_uint16_ptr(obj, "adc1-ch9-millivolts",
++                                   &s->adc1_ch9_millivolts,
++                                   OBJ_PROP_FLAG_READWRITE);
++    s->adc1_ch9_millivolts = 1950;
++}
++
++static const VMStateDescription vmstate_esp32s3_saradc = {
++    .name = TYPE_ESP32S3_SARADC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT32_ARRAY(sens_registers, Esp32s3SarAdcState,
++                             ESP32S3_SARADC_REGISTER_WORDS),
++        VMSTATE_UINT32_ARRAY(apb_registers, Esp32s3SarAdcState,
++                             ESP32S3_SARADC_REGISTER_WORDS),
++        VMSTATE_UINT16(adc1_ch9_millivolts, Esp32s3SarAdcState),
++        VMSTATE_END_OF_LIST(),
++    },
++};
++
++static void esp32s3_saradc_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "ESP32-S3 SAR ADC behavioral model";
++    dc->vmsd = &vmstate_esp32s3_saradc;
++    device_class_set_legacy_reset(dc, esp32s3_saradc_reset);
++}
++
++static const TypeInfo esp32s3_saradc_info = {
++    .name = TYPE_ESP32S3_SARADC,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(Esp32s3SarAdcState),
++    .instance_init = esp32s3_saradc_init,
++    .class_init = esp32s3_saradc_class_init,
++};
++
++static void esp32s3_saradc_register_types(void)
++{
++    type_register_static(&esp32s3_saradc_info);
++}
++
++type_init(esp32s3_saradc_register_types)
+diff --git a/hw/adc/meson.build b/hw/adc/meson.build
+index 7f7acc16196cdcc7607111743be26133aebc2424..9c0c329d76255ba66e7c2d3cce2eddaae5a813bf 100644
+--- a/hw/adc/meson.build
++++ b/hw/adc/meson.build
+@@ -1,4 +1,5 @@
+ system_ss.add(when: 'CONFIG_STM32F2XX_ADC', if_true: files('stm32f2xx_adc.c'))
++system_ss.add(when: 'CONFIG_ESP32S3_SARADC', if_true: files('esp32s3_saradc.c'))
+ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_adc.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_adc.c'))
+ system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq-xadc.c'))
+diff --git a/hw/nvram/esp32s3_efuse.c b/hw/nvram/esp32s3_efuse.c
+index df6c0c8742009af1766c4779939c52e91e1cfca6..f6e112d852d45636b779d6157e4bd8f22f7104d1 100644
+--- a/hw/nvram/esp32s3_efuse.c
++++ b/hw/nvram/esp32s3_efuse.c
+@@ -15,8 +15,17 @@
+ static void esp32s3_efuse_realize(DeviceState *dev, Error **errp)
+ {
+     ESP32S3EfuseClass* esp32s3_class = ESP32S3_EFUSE_GET_CLASS(dev);
++    ESPEfuseState *s = ESP_EFUSE(dev);
+ 
+     esp32s3_class->parent_realize(dev, errp);
++
++    if (s->blk == NULL) {
++        assert(s->mirror != NULL);
++
++        /* Expose revision-one ADC calibration fields with nominal values. */
++        s->efuses.blocks.rd_sys_part1_data4 |= 1;
++        memcpy(s->mirror, &s->efuses.blocks, sizeof(ESPEfuseBlocks));
++    }
+ }
+ 
+ 
+diff --git a/hw/xtensa/Kconfig b/hw/xtensa/Kconfig
+index 010570cb0bf93615ce6476ed978b97e2ea84e4b6..e73660604dbb22f2980f7a5a9507ec4f217bcf31 100644
+--- a/hw/xtensa/Kconfig
++++ b/hw/xtensa/Kconfig
+@@ -48,3 +48,4 @@ config XTENSA_ESP32S3
+     select STICKS3_BUTTONS
+     select BMI270
+     select M5PM1
++    select ESP32S3_SARADC
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+index a66a3dd220c7b1c578556ae017614bb94464699b..36acde7cdd7ec64d4e58e693a669bee82480db95 100644
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -65,6 +65,7 @@
+ #include "hw/gpio/esp32s3_gpio.h"
+ #include "hw/display/st7789.h"
+ #include "hw/i2c/esp32_i2c.h"
++#include "hw/adc/esp32s3_saradc.h"
+ #include "hw/input/tca8418.h"
+ #include "hw/input/sticks3_buttons.h"
+ #include "hw/sensor/bmi270.h"
+@@ -137,6 +138,7 @@ typedef struct Esp32s3SocState {
+     Esp32LEDCState ledc;
+     Esp32s3RngState rng;
+     Esp32S3TWAIState twai;
++    Esp32s3SarAdcState saradc;
+ 
+     Esp32s3RtcCntlState rtc_cntl;
+ 
+@@ -721,6 +723,9 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+         qdev_connect_gpio_out_named(DEVICE(keyboard), "nINT", 0,
+                                     keyboard_irq);
+         qemu_set_irq(keyboard_irq, 1);
++        imu = i2c_slave_new(TYPE_BMI270, 0x68);
++        qdev_set_id(DEVICE(imu), g_strdup("cardputer-adv-imu"), &error_fatal);
++        i2c_slave_realize_and_unref(imu, i2c_bus, &error_fatal);
+ 
+         display_width = 240;
+         display_height = 135;
+@@ -834,6 +839,8 @@ static void esp32s3_machine_init(MachineState *machine)
+     object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
+     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
+     object_initialize_child(OBJECT(ss), "rng", &ss->rng, TYPE_ESP32S3_RNG);
++    object_initialize_child(OBJECT(ss), "saradc", &ss->saradc,
++                            TYPE_ESP32S3_SARADC);
+ 
+     object_initialize_child(OBJECT(ss), "clock", &ss->clock, TYPE_ESP32S3_CLOCK);
+ 
+@@ -982,6 +989,17 @@ static void esp32s3_machine_init(MachineState *machine)
+         memory_region_add_subregion_overlap(sys_mem, DR_REG_LEDC_BASE, mr, 0);
+     }
+ 
++    /* RTC one-shot and digital SAR ADC register blocks. */
++    {
++        sysbus_realize(SYS_BUS_DEVICE(&ss->saradc), &error_fatal);
++        memory_region_add_subregion_overlap(
++            sys_mem, DR_REG_SENS_BASE,
++            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->saradc), 0), 0);
++        memory_region_add_subregion_overlap(
++            sys_mem, DR_REG_APB_SARADC_BASE,
++            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->saradc), 1), 0);
++    }
++
+     {
+         qdev_realize(DEVICE(&ss->rng), &ss->periph_bus, &error_fatal);
+         esp32s3_soc_add_periph_device(sys_mem, &ss->rng, ESP32S3_RNG_BASE);
+diff --git a/include/hw/adc/esp32s3_saradc.h b/include/hw/adc/esp32s3_saradc.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..08454b3752af15ee5292085cb5b73953874d3a6a
+--- /dev/null
++++ b/include/hw/adc/esp32s3_saradc.h
+@@ -0,0 +1,30 @@
++/*
++ * ESP32-S3 SAR ADC behavioral model
++ *
++ * Copyright (c) 2026 Simon Yu
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 or
++ * (at your option) any later version.
++ */
++#ifndef HW_ADC_ESP32S3_SARADC_H
++#define HW_ADC_ESP32S3_SARADC_H
++
++#include "hw/sysbus.h"
++
++#define TYPE_ESP32S3_SARADC "esp32s3-saradc"
++OBJECT_DECLARE_SIMPLE_TYPE(Esp32s3SarAdcState, ESP32S3_SARADC)
++
++#define ESP32S3_SARADC_REGISTER_WORDS 64
++
++struct Esp32s3SarAdcState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion sens_iomem;
++    MemoryRegion apb_iomem;
++    uint32_t sens_registers[ESP32S3_SARADC_REGISTER_WORDS];
++    uint32_t apb_registers[ESP32S3_SARADC_REGISTER_WORDS];
++    uint16_t adc1_ch9_millivolts;
++};
++
++#endif /* HW_ADC_ESP32S3_SARADC_H */

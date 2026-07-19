@@ -25,12 +25,14 @@ display models with correctly sized RGB framebuffers and live binary WebSocket
 streaming. Both profiles are covered by real compiled firmware, exact pixel
 assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
 passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
-and button input are now live on StickS3; its behavioral BMI270 and M5PM1 models
-accept deterministic runtime samples through the typed web protocol. Cardputer
-power remains in progress. The unmodified Cardputer Chess firmware now boots,
-renders its real setup screen, and responds to TCA8418 keyboard input through
-the web workbench; completing a full simulated game remains an application
-compatibility milestone rather than an owned release gate. The responsive
+and button input are live on StickS3 through behavioral BMI270 and M5PM1
+models. Cardputer ADV now accepts deterministic BMI270 motion and battery
+voltage through the same typed web protocol; firmware observes its battery
+through the real GPIO10 ADC1 divider path. The unmodified Cardputer Chess
+firmware now boots, preserves preferences across reset, renders and accepts
+TCA8418 keyboard input through the web workbench, and has completed a 39-ply
+game through checkmate and back to setup. It remains an application
+compatibility milestone rather than the owned release gate. The responsive
 React workbench now supports local
 firmware checks, real session lifecycle controls, live framebuffer and UART
 streams, virtual device inputs, deterministic sensor/power controls, and the
@@ -45,9 +47,8 @@ pass through that boundary.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
-firmware now boots, renders through the virtual ST7789 display, and receives
-TCA8418 keyboard input. Persistent application NVS and a complete game through
-the web interface remain the next compatibility proof.
+firmware has passed boot, virtual ST7789 rendering, TCA8418 input, persistent
+application NVS, embedded move search, checkmate, and return-to-setup proofs.
 
 ## Product Boundary
 
@@ -71,7 +72,7 @@ are explicit in [docs/security.md](docs/security.md).
 
 The emulator baseline is Espressif QEMU 9.2.2 built from a pinned source commit
 with tracked flash, I2C, GPIO, keyboard/button, SPI, display, PSRAM, IMU, and
-power-controller patches. See
+power/ADC patches. See
 [emulator/qemu/README.md](emulator/qemu/README.md) for native prerequisites and
 the reproducible build command.
 

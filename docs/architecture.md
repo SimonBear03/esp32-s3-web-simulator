@@ -36,6 +36,8 @@ client-side WebAssembly engine can implement the same contract.
 - ESP32-S3FN8 with 8 MB flash and no PSRAM
 - ST7789-compatible 240 x 135 display path
 - TCA8418 keyboard controller and key events
+- deterministic virtual BMI270 input
+- GPIO10 ADC1 battery-divider voltage input
 - NVS-backed preferences and simulated reset/power cycles
 - serial output, FreeRTOS behavior, and debugger integration
 
@@ -86,11 +88,13 @@ Later debugging work should add:
 
 ## Power Fidelity
 
-The initial model is behavioral, not an electrical circuit simulator. It should
-represent USB attachment, battery voltage/percentage, charging, backlight,
+The initial model is behavioral, not an electrical circuit simulator. Cardputer
+ADV exposes battery voltage through its GPIO10 ADC1 divider; its hardware API
+does not provide charging status or charge current. StickS3 exposes logical
+battery, VIN, and charging values through M5PM1. Later work should represent
 sleep/deep sleep, wake sources, reset, and injected brownouts. Accurate current
-consumption and thermal estimates require later calibration against physical
-devices.
+consumption, ADC noise, per-device calibration, and thermal estimates require
+physical-device measurements.
 
 ## Licensing Boundary
 
