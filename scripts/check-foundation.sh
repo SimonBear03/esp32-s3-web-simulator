@@ -21,7 +21,9 @@ for required_file in \
     emulator/qemu/patches/0003-esp32s3-gpio-input-interrupts.patch \
     emulator/qemu/patches/0004-esp32s3-gpspi-st7789.patch \
     emulator/qemu/patches/0005-esp32s3-sticks3-octal-psram-qio.patch \
-    emulator/qemu/patches/0006-esp32s3-sticks3-buttons-imu-power.patch
+    emulator/qemu/patches/0006-esp32s3-sticks3-buttons-imu-power.patch \
+    emulator/qemu/patches/0007-esp32s3-cardputer-adv-runtime.patch \
+    emulator/qemu/patches/0008-esp32s3-gpio-matrix-output.patch
 do
     if [ ! -s "$required_file" ]; then
         echo "missing required foundation file: $required_file" >&2

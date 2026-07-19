@@ -18,6 +18,7 @@ String inputBuffer;
 volatile bool keyboardInterruptPending = false;
 
 #if SIMULATOR_STICKS3
+TwoWire &boardWire = Wire;
 constexpr uint8_t kButtonAPin = 11;
 constexpr uint8_t kButtonBPin = 12;
 constexpr uint8_t kBmi270Address = 0x68;
@@ -33,6 +34,10 @@ uint8_t lastPowerSource = 0xFF;
 bool lastCharging = false;
 bool stickTelemetryReady = false;
 uint32_t lastStickTelemetryAt = 0;
+#else
+TwoWire boardWire(1);
+constexpr uint8_t kBacklightPin = 38;
+constexpr uint8_t kBacklightChannel = 7;
 #endif
 
 constexpr uint8_t kTca8418Address = 0x34;
@@ -73,27 +78,27 @@ void IRAM_ATTR handleTca8418Interrupt() {
 }
 
 bool writeTca8418Register(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(kTca8418Address);
-  Wire.write(reg);
-  Wire.write(value);
-  return Wire.endTransmission() == 0;
+  boardWire.beginTransmission(kTca8418Address);
+  boardWire.write(reg);
+  boardWire.write(value);
+  return boardWire.endTransmission() == 0;
 }
 
 bool readTca8418Register(uint8_t reg, uint8_t &value) {
-  Wire.beginTransmission(kTca8418Address);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) {
+  boardWire.beginTransmission(kTca8418Address);
+  boardWire.write(reg);
+  if (boardWire.endTransmission(false) != 0) {
     return false;
   }
-  if (Wire.requestFrom(kTca8418Address, static_cast<uint8_t>(1)) != 1) {
+  if (boardWire.requestFrom(kTca8418Address, static_cast<uint8_t>(1)) != 1) {
     return false;
   }
-  value = Wire.read();
+  value = boardWire.read();
   return true;
 }
 
 void configureTca8418() {
-  Wire.begin(8, 9, 400000);
+  boardWire.begin(8, 9, 400000);
   pinMode(kTca8418InterruptPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(kTca8418InterruptPin),
                   handleTca8418Interrupt, CHANGE);
@@ -140,24 +145,24 @@ void readTca8418Events() {
 
 #if SIMULATOR_STICKS3
 bool writeI2cRegister(uint8_t address, uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  Wire.write(value);
-  return Wire.endTransmission() == 0;
+  boardWire.beginTransmission(address);
+  boardWire.write(reg);
+  boardWire.write(value);
+  return boardWire.endTransmission() == 0;
 }
 
 bool readI2cRegisters(uint8_t address, uint8_t reg, uint8_t *values,
                       size_t length) {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) {
+  boardWire.beginTransmission(address);
+  boardWire.write(reg);
+  if (boardWire.endTransmission(false) != 0) {
     return false;
   }
-  if (Wire.requestFrom(address, static_cast<uint8_t>(length)) != length) {
+  if (boardWire.requestFrom(address, static_cast<uint8_t>(length)) != length) {
     return false;
   }
   for (size_t index = 0; index < length; index++) {
-    values[index] = Wire.read();
+    values[index] = boardWire.read();
   }
   return true;
 }
@@ -168,7 +173,7 @@ uint16_t littleEndianWord(const uint8_t *bytes) {
 }
 
 void configureStickPeripherals() {
-  Wire.begin(kInternalSdaPin, kInternalSclPin, 400000);
+  boardWire.begin(kInternalSdaPin, kInternalSclPin, 400000);
   pinMode(kButtonAPin, INPUT_PULLUP);
   pinMode(kButtonBPin, INPUT_PULLUP);
   lastButtonA = digitalRead(kButtonAPin);
@@ -250,6 +255,21 @@ void readStickTelemetry() {
     }
   }
   stickTelemetryReady = true;
+}
+#endif
+
+#if !SIMULATOR_STICKS3
+bool configureBacklight() {
+  const uint32_t frequency = ledcSetup(kBacklightChannel, 256, 8);
+  if (frequency == 0) {
+    return false;
+  }
+  ledcAttachPin(kBacklightPin, kBacklightChannel);
+  ledcWrite(kBacklightChannel, 110);
+  Serial.printf(
+      "SIM:LEDC channel=%u pin=%u frequency=%u duty=110 configured=1\n",
+      kBacklightChannel, kBacklightPin, frequency);
+  return true;
 }
 #endif
 
@@ -344,7 +364,7 @@ bool configureDisplay() {
   if (buffered && !writeDisplayData(pixels, buffered)) {
     return false;
   }
-  if (!writeDisplayCommand(0x29)) {
+  if (!writeDisplayCommand(0x21) || !writeDisplayCommand(0x29)) {
     return false;
   }
   Serial.printf("SIM:DISPLAY controller=st7789 width=%u height=%u pattern=red-blue\n",
@@ -445,6 +465,9 @@ void setup() {
   delay(50);
 #if !SIMULATOR_STICKS3
   configureTca8418();
+  if (!configureBacklight()) {
+    Serial.println("SIM:LEDC unavailable");
+  }
 #else
   configureStickPeripherals();
 #endif

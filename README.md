@@ -27,7 +27,11 @@ assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
 passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
 and button input are now live on StickS3; its behavioral BMI270 and M5PM1 models
 accept deterministic runtime samples through the typed web protocol. Cardputer
-power remains in progress. The responsive React workbench now supports local
+power remains in progress. The unmodified Cardputer Chess firmware now boots,
+renders its real setup screen, and responds to TCA8418 keyboard input through
+the web workbench; completing a full simulated game remains an application
+compatibility milestone rather than an owned release gate. The responsive
+React workbench now supports local
 firmware checks, real session lifecycle controls, live framebuffer and UART
 streams, virtual device inputs, deterministic sensor/power controls, and the
 bounded debugger on desktop and portrait layouts. The debugger
@@ -40,10 +44,10 @@ filesystem, and one writable session directory. Both board conformance suites
 pass through that boundary.
 
 Cardputer Chess is a compatibility and stress application, not the owned
-release gate while that application is itself in progress. A successful first
-device milestone means its unmodified firmware can boot, render through the
-virtual ST7789 display, receive TCA8418 keyboard input, use persistent NVS, and
-complete a game through the web interface.
+release gate while that application is itself in progress. Its unmodified
+firmware now boots, renders through the virtual ST7789 display, and receives
+TCA8418 keyboard input. Persistent application NVS and a complete game through
+the web interface remain the next compatibility proof.
 
 ## Product Boundary
 

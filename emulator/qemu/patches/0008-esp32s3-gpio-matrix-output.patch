@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000008 Mon Sep 17 00:00:00 2001
+From: ESP32-S3 Web Simulator contributors <noreply@example.com>
+Date: Sun, 19 Jul 2026 14:30:00 +0800
+Subject: [PATCH 8/8] esp32s3: preserve GPIO matrix output writes
+
+Do not force disabled pads low during reset or output-enable transitions,
+while still propagating explicit OUT writes used by GPIO-matrix-routed
+signals such as the Cardputer ADV display D/C pin.
+---
+ hw/gpio/esp32_gpio.c | 31 ++++++++++++++++++++++++-------
+ 1 file changed, 24 insertions(+), 7 deletions(-)
+
+diff --git a/hw/gpio/esp32_gpio.c b/hw/gpio/esp32_gpio.c
+--- a/hw/gpio/esp32_gpio.c
++++ b/hw/gpio/esp32_gpio.c
+@@ -76,14 +76,23 @@ static void esp32_gpio_update_irq(Esp32GpioState *s)
+                  !!(s->interrupt_status & esp32_gpio_enabled_interrupts(s)));
+ }
+ 
+-static void esp32_gpio_update_outputs(Esp32GpioState *s, uint64_t changed)
++static void esp32_gpio_update_outputs(Esp32GpioState *s, uint64_t changed,
++                                      bool matrix_write)
+ {
+     changed &= MAKE_64BIT_MASK(0, s->pin_count);
+     while (changed) {
+         unsigned int pin = ctz64(changed);
+-        bool level = (s->output_enable & s->output_level) & BIT_ULL(pin);
++        bool enabled = s->output_enable & BIT_ULL(pin);
+ 
+-        qemu_set_irq(s->pin_out[pin], level);
++        /*
++         * Reset and output-enable changes must not force a disabled pad low.
++         * Direct OUT writes can still feed a pad through the GPIO matrix even
++         * when the software output-enable bit is clear.
++         */
++        if (enabled || matrix_write) {
++            qemu_set_irq(s->pin_out[pin],
++                         !!(s->output_level & BIT_ULL(pin)));
++        }
+         changed &= ~BIT_ULL(pin);
+     }
+ }
+@@ -218,6 +227,7 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
+     Esp32GpioState *s = ESP32_GPIO(opaque);
+     uint64_t mask = value;
+     uint64_t changed = 0;
++    bool matrix_write = false;
+ 
+     if (!s->s3_mode) {
+         return;
+@@ -225,28 +235,34 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
+ 
+     switch (addr) {
+     case S3_GPIO_OUT:
++        matrix_write = true;
+         changed = s->output_level ^ (uint32_t)value;
+         s->output_level = (s->output_level & ~UINT32_MAX) | (uint32_t)value;
+         break;
+     case S3_GPIO_OUT_W1TS:
++        matrix_write = true;
+         changed = ~s->output_level & (uint32_t)value;
+         s->output_level |= (uint32_t)value;
+         break;
+     case S3_GPIO_OUT_W1TC:
++        matrix_write = true;
+         changed = s->output_level & (uint32_t)value;
+         s->output_level &= ~(uint64_t)(uint32_t)value;
+         break;
+     case S3_GPIO_OUT1:
++        matrix_write = true;
+         mask <<= 32;
+         changed = (s->output_level ^ mask) & (UINT64_MAX << 32);
+         s->output_level = (s->output_level & UINT32_MAX) | mask;
+         break;
+     case S3_GPIO_OUT1_W1TS:
++        matrix_write = true;
+         mask <<= 32;
+         changed = ~s->output_level & mask;
+         s->output_level |= mask;
+         break;
+     case S3_GPIO_OUT1_W1TC:
++        matrix_write = true;
+         mask <<= 32;
+         changed = s->output_level & mask;
+         s->output_level &= ~mask;
+@@ -311,7 +327,7 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
+         return;
+     }
+ 
+-    esp32_gpio_update_outputs(s, changed);
++    esp32_gpio_update_outputs(s, changed, matrix_write);
+ }
+ 
+ static const MemoryRegionOps gpio_ops = {
+@@ -328,7 +344,7 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
+     s->output_enable = 0;
+     s->interrupt_status = 0;
+     memset(s->pin_config, 0, sizeof(s->pin_config));
+-    esp32_gpio_update_outputs(s, MAKE_64BIT_MASK(0, s->pin_count));
++    esp32_gpio_update_outputs(s, MAKE_64BIT_MASK(0, s->pin_count), false);
+     esp32_gpio_update_irq(s);
+ }
+ 
+--
+2.43.0

@@ -135,6 +135,39 @@ binding could not be exercised inside the Codex sandbox because that sandbox
 rejects all Unix-domain socket binds with `EPERM`; QMP remains enabled by
 default and must be live-tested in the deployment boundary.
 
+## 2026-07-19 Cardputer Chess web compatibility proof
+
+The next compatibility run used the unmodified Cardputer Chess checkout at
+commit `5699ef4e5d0f0dc20d8b2775511a66ab4e81db04`. Its locally generated merged
+image was 617712 bytes with SHA-256:
+
+```text
+2584687edc66495863c591ec7893331b15cc97aaf302c28c560a43c9ade93b4e
+```
+
+The image is not committed. Host tests passed 213 assertions in both the normal
+and sanitizer runs, and its PlatformIO `cardputer-adv` build used 52.4% of RAM
+and 16.5% of flash. These application checks establish a useful input baseline;
+they do not make the in-progress Chess repository a simulator release gate.
+
+Espressif QEMU commit `40edccac415693c5130f91c01d84176ae6008566`
+with tracked patches 0001 through 0008 ran the image for 25 seconds inside the
+Bubblewrap worker boundary. The session remained `running`, returned no worker
+exit code, and emitted no panic, reset loop, stack-canary failure, or browser
+error.
+
+The actual React workbench then uploaded the same merged image and waited 12
+seconds before requiring three identical framebuffer samples. The stable
+240x135 frame rendered the recognizable `CARDPUTER CHESS` setup screen rather
+than accepting boot-time pixel activity. Pressing the simulated `S` key through
+the web keyboard and TCA8418 path moved the selection from `Play as` to `Level`;
+the resulting frame again stabilized for three samples. The two deterministic
+RGB hashes differed (`4192754852` then `3632196620`).
+
+This proves boot, current M5GFX board detection, SPI3/ST7789 rendering, browser
+framebuffer delivery, and one real keyboard transition for the application.
+It does not yet prove application NVS behavior or completion of a full game.
+
 ## Evidence rules
 
 - Record the exact QEMU commit, patch set, firmware source revision, build

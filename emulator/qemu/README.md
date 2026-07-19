@@ -44,6 +44,19 @@ voltage, and charging state deterministically. These values reach firmware
 through the normal GPIO and I2C paths; the model does not claim analog
 electrical, noise, calibration, or brownout fidelity.
 
+`patches/0007-esp32s3-cardputer-adv-runtime.patch` completes the paths used by
+the current M5Unified/M5GFX Cardputer ADV runtime. It moves the internal
+TCA8418 to I2C1, exposes the board-detection pull-ups, answers the headless
+SPI2 ST7789 probe, preserves the manually controlled SPI3 chip-select path,
+backs the ESP32-S3 LEDC register window, and models ST7789 inversion as panel
+drive polarity rather than RGB negation.
+
+`patches/0008-esp32s3-gpio-matrix-output.patch` distinguishes reset-time
+high-impedance pads from explicit GPIO OUT writes. This keeps unconfigured
+pins from being forced low while allowing matrix-routed outputs such as the
+Cardputer ADV display D/C signal on GPIO34 to transition after M5GFX clears
+the software GPIO-enable bit.
+
 ## Build
 
 On Ubuntu 24.04, install the native build dependencies:

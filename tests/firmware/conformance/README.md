@@ -37,11 +37,15 @@ Successful base conformance requires:
 - QMP pause halting heartbeats, framebuffer capture while paused, resume
   restoring heartbeats, and QMP reset preserving the private flash image;
 - `ping\n` producing `SIM:PONG`;
-- TCA8418 configuration at address `0x34` and QMP-injected `A` press/release
-  reaching the firmware through nINT, GPIO 11, the ESP-IDF ISR, and producing
+- TCA8418 configuration at address `0x34` over the Cardputer ADV's I2C1
+  controller, with QMP-injected `A` press/release reaching the firmware through
+  nINT, GPIO 11, the ESP-IDF ISR, and producing
   raw FIFO events `0x8d` and `0x0d` without polling;
+- Cardputer ADV LEDC channel 7 setup on GPIO 38 at 256 Hz with an 8-bit duty of
+  110, exercising the display-backlight initialization path used by M5GFX;
 - a CPU-FIFO SPI3 transaction path that initializes the Cardputer ADV ST7789,
-  renders a deterministic red/blue 240x135 framebuffer, and emits
+  enables the panel's normal inversion mode, renders a deterministic red/blue
+  240x135 framebuffer without photographic color inversion, and emits
   `SIM:DISPLAY controller=st7789 width=240 height=135 pattern=red-blue`;
 - the corresponding StickS3 pins, 135x240 crop, and exact framebuffer
   assertions when the StickS3 fixture is selected;

@@ -101,3 +101,29 @@ async def test_execute_qmp_preserves_scalar_qom_results(
     monkeypatch.setattr(qmp.asyncio, "open_unix_connection", open_connection)
 
     assert await qmp.execute_qmp(Path("/runtime/qmp.sock"), "qom-get") is True
+
+
+async def test_execute_qmp_ignores_peer_reset_during_socket_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = qmp_reader(
+        {"QMP": {"version": {"qemu": {"major": 9}}}},
+        {"return": {}, "id": "capabilities"},
+        {"return": {"accepted": True}, "id": "command"},
+    )
+
+    class ResettingWriter(FakeWriter):
+        async def wait_closed(self) -> None:
+            raise ConnectionResetError("QEMU closed first")
+
+    writer = ResettingWriter()
+
+    async def open_connection(_path: Path) -> tuple[asyncio.StreamReader, FakeWriter]:
+        return reader, writer
+
+    monkeypatch.setattr(qmp.asyncio, "open_unix_connection", open_connection)
+
+    assert await qmp.execute_qmp(Path("/runtime/qmp.sock"), "query-status") == {
+        "accepted": True
+    }
+    assert writer.closed

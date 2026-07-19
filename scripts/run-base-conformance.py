@@ -93,6 +93,10 @@ async def run(args: argparse.Namespace) -> None:
             if board.id == "cardputer-adv":
                 await wait_for_text(session, "SIM:TCA8418 address=0x34 cfg=0x01")
                 await wait_for_text(session, "SIM:TCA8418_IRQ pin=11 mode=change")
+                await wait_for_text(
+                    session,
+                    "SIM:LEDC channel=7 pin=38 frequency=256 duty=110 configured=1",
+                )
             else:
                 await wait_for_text(session, "SIM:PSRAM bytes=8388608 test=pass")
                 await wait_for_text(

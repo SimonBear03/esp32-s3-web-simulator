@@ -1,0 +1,291 @@
+From 0000000000000000000000000000000000000007 Mon Sep 17 00:00:00 2001
+From: ESP32-S3 Web Simulator contributors <noreply@example.com>
+Date: Sun, 19 Jul 2026 14:30:00 +0800
+Subject: [PATCH 7/8] esp32s3: complete Cardputer ADV runtime detection
+
+Model the Cardputer ADV system-I2C selection, M5GFX panel probe, manual
+display chip-select path, and ESP32-S3 LEDC register backing. Treat ST7789
+display inversion as panel-drive polarity rather than RGB negation.
+---
+ hw/display/st7789.c             | 31 ++++++++++++++++++++++++-------
+ hw/misc/esp32_ledc.c            | 21 +++++++++++++++++++++
+ hw/ssi/esp32s3_gpspi.c          |  8 +++++++-
+ hw/xtensa/esp32s3.c             | 41 +++++++++++++++++++++++++++++++++++++++--
+ include/hw/misc/esp32_ledc.h    |  2 ++
+ include/hw/ssi/esp32s3_gpspi.h  |  1 +
+ 6 files changed, 94 insertions(+), 10 deletions(-)
+
+diff --git a/hw/display/st7789.c b/hw/display/st7789.c
+--- a/hw/display/st7789.c
++++ b/hw/display/st7789.c
+@@ -42,6 +42,8 @@ typedef struct ST7789State {
+     uint16_t visible_height;
+     uint16_t offset_x;
+     uint16_t offset_y;
++    bool console_enabled;
++    bool id_probe;
+ 
+     uint8_t command;
+     uint8_t parameter_index;
+@@ -199,6 +201,20 @@ static uint32_t st7789_transfer(SSIPeripheral *device, uint32_t value)
+ {
+     ST7789State *s = ST7789(device);
+ 
++    if (s->id_probe) {
++        static const uint8_t id[] = { 0x85, 0x85, 0x52, 0x00 };
++
++        if ((uint8_t)value == ST7789_CMD_RDDID) {
++            s->command = ST7789_CMD_RDDID;
++            s->read_index = 0;
++            return 0;
++        }
++        if (s->command != ST7789_CMD_RDDID) {
++            return 0;
++        }
++        return id[MIN(s->read_index++, ARRAY_SIZE(id) - 1)];
++    }
++
+     if (!s->reset) {
+         return 0;
+     }
+@@ -246,11 +262,8 @@ static void st7789_draw_pixel(DisplaySurface *surface, uint8_t *destination,
+         red = blue;
+         blue = swap;
+     }
+-    if (inverse) {
+-        red = 255 - red;
+-        green = 255 - green;
+-        blue = 255 - blue;
+-    }
++    /* INVON controls panel-drive polarity; it does not negate GRAM colours. */
++    (void)inverse;
+ 
+     switch (surface_bits_per_pixel(surface)) {
+     case 8:
+@@ -331,8 +344,10 @@ static void st7789_realize(SSIPeripheral *device, Error **errp)
+         return;
+     }
+ 
+-    s->console = graphic_console_init(dev, 0, &st7789_graphic_ops, s);
+-    qemu_console_resize(s->console, s->visible_width, s->visible_height);
++    if (s->console_enabled) {
++        s->console = graphic_console_init(dev, 0, &st7789_graphic_ops, s);
++        qemu_console_resize(s->console, s->visible_width, s->visible_height);
++    }
+     qdev_init_gpio_in_named(dev, st7789_dc, "dc", 1);
+     qdev_init_gpio_in_named(dev, st7789_reset, "reset", 1);
+     st7789_reset_state(s);
+@@ -373,6 +388,8 @@ static Property st7789_properties[] = {
+     DEFINE_PROP_UINT16("visible-height", ST7789State, visible_height, 320),
+     DEFINE_PROP_UINT16("offset-x", ST7789State, offset_x, 0),
+     DEFINE_PROP_UINT16("offset-y", ST7789State, offset_y, 0),
++    DEFINE_PROP_BOOL("console-enabled", ST7789State, console_enabled, true),
++    DEFINE_PROP_BOOL("id-probe", ST7789State, id_probe, false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/hw/misc/esp32_ledc.c b/hw/misc/esp32_ledc.c
+--- a/hw/misc/esp32_ledc.c
++++ b/hw/misc/esp32_ledc.c
+@@ -3,6 +3,7 @@
+ #include "qemu/log.h"
+ #include "qapi/error.h"
+ #include "hw/misc/esp32_ledc.h"
++#include "hw/qdev-properties.h"
+ 
+ #define ESP32_LEDC_REGS_SIZE (A_LEDC_CONF_REG + 4)
+ 
+@@ -10,6 +11,13 @@ static uint64_t esp32_ledc_read(void *opaque, hwaddr addr, unsigned int size)
+ {
+     Esp32LEDCState *s = ESP32_LEDC(opaque);
+     uint64_t r = 0;
++
++    if (s->s3_mode) {
++        if (!(addr & 3) && addr < sizeof(s->s3_registers)) {
++            return s->s3_registers[addr / sizeof(uint32_t)];
++        }
++        return 0;
++    }
+     switch (addr) {
+     case A_LEDC_HSTIMER0_CONF_REG ... A_LEDC_LSTIMER3_CONF_REG:
+         r = s->timer_conf_reg[(addr - A_LEDC_HSTIMER0_CONF_REG) / 0x8];
+@@ -55,6 +63,13 @@ static void esp32_ledc_write(void *opaque, hwaddr addr,
+                             uint64_t value, unsigned int size)
+ {
+     Esp32LEDCState *s = ESP32_LEDC(opaque);
++
++    if (s->s3_mode) {
++        if (!(addr & 3) && addr < sizeof(s->s3_registers)) {
++            s->s3_registers[addr / sizeof(uint32_t)] = value;
++        }
++        return;
++    }
+     switch (addr) {
+     case A_LEDC_HSTIMER0_CONF_REG ... A_LEDC_LSTIMER3_CONF_REG:
+         /* get duty resolution from timer config */
+@@ -135,6 +150,12 @@ static void esp32_ledc_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
++    static const Property properties[] = {
++        DEFINE_PROP_BOOL("s3-mode", Esp32LEDCState, s3_mode, false),
++        DEFINE_PROP_END_OF_LIST(),
++    };
++
+     dc->realize = esp32_ledc_realize;
++    device_class_set_props(dc, properties);
+ }
+ 
+ static const TypeInfo esp32_ledc_info = {
+diff --git a/hw/ssi/esp32s3_gpspi.c b/hw/ssi/esp32s3_gpspi.c
+--- a/hw/ssi/esp32s3_gpspi.c
++++ b/hw/ssi/esp32s3_gpspi.c
+@@ -8,6 +8,7 @@
+ 
+ #include "qemu/osdep.h"
+ #include "hw/irq.h"
++#include "hw/qdev-properties.h"
+ #include "hw/ssi/esp32s3_gpspi.h"
+ #include "migration/vmstate.h"
+ #include "qemu/log.h"
+@@ -51,7 +52,7 @@ static void esp32s3_gpspi_update_irq(ESP32S3GpspiState *s)
+ 
+ static void esp32s3_gpspi_set_cs(ESP32S3GpspiState *s, bool high)
+ {
+-    if (s->misc & GPSPI_MISC_CS0_DISABLE) {
++    if ((s->misc & GPSPI_MISC_CS0_DISABLE) && !s->force_cs0) {
+         qemu_set_irq(s->cs[0], 1);
+         return;
+     }
+@@ -316,9 +317,14 @@ static void esp32s3_gpspi_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     ResettableClass *rc = RESETTABLE_CLASS(klass);
++    static const Property properties[] = {
++        DEFINE_PROP_BOOL("force-cs0", ESP32S3GpspiState, force_cs0, false),
++        DEFINE_PROP_END_OF_LIST(),
++    };
+ 
+     rc->phases.hold = esp32s3_gpspi_reset_hold;
+     dc->vmsd = &vmstate_esp32s3_gpspi;
++    device_class_set_props(dc, properties);
+ }
+ 
+ static const TypeInfo esp32s3_gpspi_info = {
+diff --git a/hw/xtensa/esp32s3.c b/hw/xtensa/esp32s3.c
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -50,6 +50,7 @@
+ #include "hw/misc/esp32s3_cache.h"
+ #include "hw/char/esp32s3_uart.h"
+ #include "hw/misc/esp32s3_rng.h"
++#include "hw/misc/esp32_ledc.h"
+ 
+ #include "hw/nvram/esp32s3_efuse.h"
+ #include "hw/xtensa/esp32s3_clk.h"
+@@ -133,6 +134,7 @@ struct Esp32s3SocState {
+     Esp32I2CState i2c[ESP32S3_I2C_COUNT];
+     ESP32S3GpspiState gpspi[2];
+     ESP32S3GPIOState gpio;
++    Esp32LEDCState ledc;
+     Esp32s3RngState rng;
+     Esp32S3TWAIState twai;
+ 
+@@ -584,6 +586,9 @@ static void esp32s3_soc_init(Object *obj)
+         object_initialize_child(obj, name, &s->gpspi[i], TYPE_ESP32S3_GPSPI);
+     }
+ 
++    object_initialize_child(obj, "ledc", &s->ledc, TYPE_ESP32_LEDC);
++    qdev_prop_set_bit(DEVICE(&s->ledc), "s3-mode", true);
++
+     object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev");
+     object_property_add_alias(obj, "serial1", OBJECT(&s->uart[1]), "chardev");
+     // object_property_add_alias(obj, "serial2", OBJECT(&s->uart[2]), "chardev");
+@@ -685,6 +690,7 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+     I2CSlave *imu;
+     I2CSlave *pmic;
+     DeviceState *display;
++    DeviceState *display_probe = NULL;
+     qemu_irq display_dc;
+     qemu_irq display_reset;
+     uint16_t display_width;
+@@ -700,7 +706,14 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+     }
+ 
+     if (!strcmp(ms->board_profile, "cardputer-adv")) {
+-        i2c_master = DEVICE(&soc->i2c[0]);
++        /* M5GFX samples the ADV system I2C pull-ups during board detection. */
++        qemu_set_irq(qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 8),
++                     1);
++        qemu_set_irq(qdev_get_gpio_in_named(DEVICE(&soc->gpio), "gpio-in", 9),
++                     1);
++
++        /* M5Unified assigns the Cardputer ADV internal bus to I2C_NUM_1. */
++        i2c_master = DEVICE(&soc->i2c[1]);
+         i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
+         keyboard = i2c_slave_create_simple(i2c_bus, TYPE_TCA8418, 0x34);
+         keyboard_irq = qdev_get_gpio_in_named(DEVICE(&soc->gpio),
+@@ -715,6 +728,16 @@ static void esp32s3_machine_init_board_devices(Esp32s3MachineState *ms,
+         display_offset_y = 53;
+         dc_pin = 34;
+         reset_pin = 33;
++
++        /* M5GFX probes the panel through SPI2 before using SPI3 at runtime. */
++        display_probe = qdev_new(TYPE_ST7789);
++        qdev_prop_set_bit(display_probe, "console-enabled", false);
++        qdev_prop_set_bit(display_probe, "id-probe", true);
++        ssi_realize_and_unref(display_probe, soc->gpspi[0].spi, &error_fatal);
++        qdev_connect_gpio_out_named(
++            DEVICE(&soc->gpio), "gpio-out", 37,
++            qdev_get_gpio_in_named(display_probe, SSI_GPIO_CS, 0));
++        qemu_set_irq(qdev_get_gpio_in_named(display_probe, SSI_GPIO_CS, 0), 1);
+     } else {
+         buttons = qdev_new(TYPE_STICKS3_BUTTONS);
+         qdev_set_id(buttons, g_strdup("sticks3-buttons"), &error_fatal);
+@@ -800,6 +823,9 @@ static void esp32s3_machine_init(MachineState *machine)
+     // qdev_prop_set_chr(DEVICE(ss), "serial1", serial_hd(1));
+     // qdev_prop_set_chr(DEVICE(ss), "serial2", serial_hd(2));
+ 
++    if (strcmp(ms->board_profile, "none")) {
++        qdev_prop_set_bit(DEVICE(&ss->gpspi[1]), "force-cs0", true);
++    }
+     qdev_realize(DEVICE(ss), NULL, &error_fatal);
+ 
+     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
+@@ -949,6 +975,13 @@ static void esp32s3_machine_init(MachineState *machine)
+         esp32s3_machine_init_board_devices(ms, ss);
+     }
+ 
++    /* LEDC PWM realization (backlight and user PWM channels). */
++    {
++        sysbus_realize(SYS_BUS_DEVICE(&ss->ledc), &error_fatal);
++        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->ledc), 0);
++        memory_region_add_subregion_overlap(sys_mem, DR_REG_LEDC_BASE, mr, 0);
++    }
++
+     {
+         qdev_realize(DEVICE(&ss->rng), &ss->periph_bus, &error_fatal);
+         esp32s3_soc_add_periph_device(sys_mem, &ss->rng, ESP32S3_RNG_BASE);
+diff --git a/include/hw/misc/esp32_ledc.h b/include/hw/misc/esp32_ledc.h
+--- a/include/hw/misc/esp32_ledc.h
++++ b/include/hw/misc/esp32_ledc.h
+@@ -13,5 +13,7 @@ typedef struct Esp32LEDCState {
+     SysBusDevice parent_object;
+     MemoryRegion iomem;
++    bool s3_mode;
++    uint32_t s3_registers[128];
+     uint32_t duty_res[ESP32_LEDC_TIMER_CNT];
+     uint32_t timer_conf_reg[ESP32_LEDC_TIMER_CNT];
+     uint32_t channel_conf0_reg[ESP32_LEDC_CHANNEL_CNT];
+diff --git a/include/hw/ssi/esp32s3_gpspi.h b/include/hw/ssi/esp32s3_gpspi.h
+--- a/include/hw/ssi/esp32s3_gpspi.h
++++ b/include/hw/ssi/esp32s3_gpspi.h
+@@ -20,6 +20,7 @@ typedef struct ESP32S3GpspiState {
+     SSIBus *spi;
+     qemu_irq irq;
+     qemu_irq cs[ESP32S3_GPSPI_CS_COUNT];
++    bool force_cs0;
+ 
+     uint32_t addr;
+     uint32_t ctrl;
+--
+2.43.0

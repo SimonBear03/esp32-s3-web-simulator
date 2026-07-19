@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -103,4 +104,5 @@ async def execute_qmp(
         raise QmpUnavailableError(f"QMP command timed out: {command}") from error
     finally:
         writer.close()
-        await writer.wait_closed()
+        with suppress(ConnectionError):
+            await writer.wait_closed()
