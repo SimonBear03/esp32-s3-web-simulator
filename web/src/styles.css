@@ -330,6 +330,104 @@ output {
   cursor: pointer;
 }
 
+.access-gate {
+  position: fixed;
+  z-index: 240;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(6 9 10 / 88%);
+  backdrop-filter: blur(8px);
+}
+
+.access-gate-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: min(460px, 100%);
+  padding: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 52%);
+}
+
+.access-gate-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 20px;
+  color: var(--accent);
+  border: 1px solid #64871f;
+  border-radius: 8px;
+  background: var(--accent-dark);
+}
+
+.access-gate h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(22px, 3vw, 28px);
+  font-weight: 650;
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+}
+
+.access-gate p {
+  margin: 14px 0 22px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.access-gate small {
+  margin-top: 20px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.turnstile-slot {
+  min-width: 300px;
+  min-height: 65px;
+}
+
+.gate-loading {
+  min-height: 42px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.gate-error {
+  width: 100%;
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  color: #ffd8d4;
+  border-left: 2px solid var(--red);
+  background: #251616;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .access-gate {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .access-gate-panel {
+    padding: 26px 22px;
+  }
+
+  .turnstile-slot {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+
 .workbench {
   display: grid;
   grid-template-columns: 300px minmax(520px, 1fr) 400px;

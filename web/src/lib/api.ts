@@ -3,6 +3,8 @@
 import type {
   BoardProfile,
   DebugStatus,
+  HostedAccessConfig,
+  AnonymousHeartbeat,
   InputEvent,
   MemoryRead,
   ReplayStatus,
@@ -35,6 +37,62 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new SimulatorApiError(detail, response.status);
   }
   return (await response.json()) as T;
+}
+
+function isHostedAccessConfig(value: unknown): value is HostedAccessConfig {
+  if (!value || typeof value !== "object") return false;
+  const config = value as Partial<HostedAccessConfig>;
+  return (
+    typeof config.enabled === "boolean" &&
+    typeof config.authorized === "boolean" &&
+    typeof config.capability === "boolean" &&
+    (config.access_kind === "account" ||
+      config.access_kind === "anonymous" ||
+      config.access_kind === null) &&
+    (typeof config.site_key === "string" || config.site_key === null) &&
+    (typeof config.action === "string" || config.action === null) &&
+    (typeof config.heartbeat_interval_seconds === "number" ||
+      config.heartbeat_interval_seconds === null) &&
+    (typeof config.session_lifetime_seconds === "number" ||
+      config.session_lifetime_seconds === null)
+  );
+}
+
+export async function getHostedAccessConfig(
+  signal?: AbortSignal,
+): Promise<HostedAccessConfig | null> {
+  const endpoint = new URL(`${API_BASE}/anonymous/config`, window.location.origin);
+  if (endpoint.origin !== window.location.origin) return null;
+  const response = await fetch(endpoint, { credentials: "same-origin", signal });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new SimulatorApiError(
+      `Hosted access check failed (${response.status})`,
+      response.status,
+    );
+  }
+  const value: unknown = await response.json();
+  if (!isHostedAccessConfig(value)) {
+    throw new SimulatorApiError("Hosted access returned an invalid response", 502);
+  }
+  return value;
+}
+
+export function createAnonymousCapability(token: string): Promise<{
+  anonymous: true;
+  expires_at: number;
+}> {
+  return request("/anonymous/capabilities", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+}
+
+export function heartbeatAnonymousSession(
+  sessionId: string,
+): Promise<AnonymousHeartbeat> {
+  return request(`/v1/sessions/${sessionId}/heartbeat`, { method: "POST" });
 }
 
 export function listBoards(signal?: AbortSignal): Promise<BoardProfile[]> {

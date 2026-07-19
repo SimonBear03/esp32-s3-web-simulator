@@ -6,6 +6,7 @@ import { useCallback, useState } from "react";
 import { AppHeader } from "./components/AppHeader";
 import { DeviceStage } from "./components/DeviceStage";
 import { FirmwarePanel } from "./components/FirmwarePanel";
+import { HostedAccessGate } from "./components/HostedAccessGate";
 import { Inspector } from "./components/Inspector";
 import {
   MobilePanelNav,
@@ -14,12 +15,14 @@ import {
 import { SerialDock } from "./components/SerialDock";
 import { StatusBar } from "./components/StatusBar";
 import { useBoardProfiles } from "./hooks/useBoardProfiles";
+import { useHostedAccess } from "./hooks/useHostedAccess";
 import { useSimulatorSession } from "./hooks/useSimulatorSession";
 import { shortBoardLabel } from "./lib/boards";
 import type { BoardId } from "./lib/types";
 
 export function App() {
   const boards = useBoardProfiles();
+  const hostedAccess = useHostedAccess();
   const [boardId, setBoardId] = useState<BoardId>("cardputer-adv");
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("device");
   const [setupOpen, setSetupOpen] = useState(false);
@@ -102,6 +105,12 @@ export function App() {
           <FirmwarePanel
             board={board}
             onStart={async (file) => {
+              if (
+                hostedAccess.state !== "standalone" &&
+                hostedAccess.state !== "authorized"
+              ) {
+                return;
+              }
               if (await start(boardId, file)) {
                 setSetupOpen(false);
                 setMobilePanel("device");
@@ -139,6 +148,7 @@ export function App() {
       </div>
       <MobilePanelNav onChange={setMobilePanel} panel={mobilePanel} />
       <StatusBar inputConnected={inputConnected} expiresAt={session?.expires_at ?? null} />
+      <HostedAccessGate access={hostedAccess} />
     </div>
   );
 }

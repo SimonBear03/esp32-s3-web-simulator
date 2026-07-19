@@ -62,3 +62,9 @@ Docker socket is reachable, exercise resource exhaustion and crash cleanup,
 run both owned board conformance suites, and verify unrelated VPS services
 retain headroom with two worst-case workers. Anonymous creation remains disabled
 when any check is unavailable or fails.
+
+The host gate must additionally prove the isolated Turnstile verifier has no
+site database, core, broker, worker, or Docker access; the site has no general
+internet egress; anonymous capability/session quotas serialize across accounts;
+and a lost heartbeat deletes the managed worker within the documented cleanup
+window.

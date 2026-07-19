@@ -7,8 +7,10 @@ import {
   createSession,
   deleteSession,
   getSession,
+  heartbeatAnonymousSession,
   openSessionSocket,
   sendInput,
+  SimulatorApiError,
 } from "../lib/api";
 import type {
   BoardId,
@@ -95,6 +97,35 @@ export function useSimulatorSession(): SimulatorSessionController {
       window.clearInterval(timer);
     };
   }, [session?.id, session?.state]);
+
+  useEffect(() => {
+    if (!session?.anonymous || !ACTIVE_STATES.has(session.state)) return;
+    const sessionId = session.id;
+    const intervalSeconds = Math.max(
+      5,
+      Math.min(30, session.heartbeat_interval_seconds ?? 15),
+    );
+    let current = true;
+    const heartbeat = () => {
+      void heartbeatAnonymousSession(sessionId).catch((heartbeatError: unknown) => {
+        if (!current) return;
+        if (
+          heartbeatError instanceof SimulatorApiError &&
+          [401, 404].includes(heartbeatError.status)
+        ) {
+          setSession((value) =>
+            value?.id === sessionId ? { ...value, state: "expired" } : value,
+          );
+        }
+        setError(messageFromError(heartbeatError));
+      });
+    };
+    const timer = window.setInterval(heartbeat, intervalSeconds * 1000);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [session?.anonymous, session?.heartbeat_interval_seconds, session?.id, session?.state]);
 
   const runAction = useCallback(
     async (

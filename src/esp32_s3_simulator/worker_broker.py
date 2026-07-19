@@ -94,15 +94,15 @@ class OciWorkerBroker:
             self._reconcile_task = asyncio.create_task(self._reconcile_loop())
 
     async def close(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
+        self._runtime_healthy = False
+        server = self._server
+        if server is not None:
+            server.close()
             self._server = None
         if self._reconcile_task is not None:
             self._reconcile_task.cancel()
             await asyncio.gather(self._reconcile_task, return_exceptions=True)
             self._reconcile_task = None
-        self._runtime_healthy = False
         async with self._lock:
             active = tuple(self._active)
             processes = dict(self._processes)
@@ -110,6 +110,8 @@ class OciWorkerBroker:
             *(self._force_cleanup(session_id, processes.get(session_id)) for session_id in active),
             return_exceptions=True,
         )
+        if server is not None:
+            await server.wait_closed()
         self._remove_stale_socket()
 
     async def serve_forever(self) -> None:

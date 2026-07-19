@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -151,7 +152,7 @@ async def test_broker_shutdown_kills_attached_workers(tmp_path: Path) -> None:
     assert broker.active_count == 1
     await broker.close()
 
-    assert await process.wait() != 0
+    assert await asyncio.wait_for(process.wait(), timeout=2) != 0
     assert broker.active_count == 0
 
 

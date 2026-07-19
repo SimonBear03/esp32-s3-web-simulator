@@ -51,6 +51,11 @@ no capabilities, seccomp/AppArmor, cgroup limits, QEMU's inner sandbox, and
 one validated session bind. Anonymous execution remains disabled until the
 live host acceptance suite proves every layer is active. Both board
 conformance suites already pass through the Bubblewrap rollback boundary.
+The same open-source workbench now detects an optional same-origin hosted
+access contract. When enabled by a deployment it remains locked until a
+server-validated Turnstile challenge creates an HttpOnly anonymous capability,
+then maintains only the short-lived session heartbeat. Standalone/local use is
+unchanged when that contract is absent.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
@@ -136,6 +141,12 @@ rootless worker identity, and every live acceptance gate in
 ownership gateway and hardened service configuration in
 [docs/security.md](docs/security.md); failed isolation never falls back to a
 weaker mode.
+
+The web client treats `/anonymous/config` as optional: a `404` means standalone
+mode. A hosted gateway may instead require a challenge, issue a same-origin
+HttpOnly capability, and require `/v1/sessions/{id}/heartbeat` for an anonymous
+session. The browser never receives the Turnstile secret or stores the
+capability in JavaScript.
 
 ## Remote
 

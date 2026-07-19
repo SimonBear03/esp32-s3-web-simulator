@@ -15,9 +15,12 @@ The initial deployment direction is server-side emulation:
 
 ```text
 Browser client
-  device UI, input, serial, debugger
+  device UI, input, serial, bounded hosted-access UI
              |
         documented WebSocket/API protocol
+             |
+Private hosted gateway (production)
+  account or hashed anonymous capability, origin policy, atomic quotas
              |
 Simulation session service
   validation, quotas, recording; no Docker authority
@@ -31,6 +34,13 @@ One emulator worker per active session
 
 The browser protocol should remain engine-neutral so a future open-source
 client-side WebAssembly engine can implement the same contract.
+
+The hosted-access extension is optional and same-origin. A missing
+`/anonymous/config` route means standalone mode. In public hosting, Turnstile
+verification is delegated over a protected Unix socket to a minimal process
+that has the Turnstile secret and fixed Cloudflare egress but no database,
+Docker, core, worker, or firmware authority. This avoids granting general
+internet egress or the challenge secret to the gateway process.
 
 ## Initial Device Models
 

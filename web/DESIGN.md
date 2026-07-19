@@ -33,6 +33,10 @@ runtime inspector, and the serial dock.
 - At desktop widths the workbench is a three-column open grid above a docked
   serial region. At narrow widths setup becomes a disclosure and Device,
   Serial, and Inspector become mutually exclusive primary panels.
+- Hosted access is an optional full-workbench gate, not a marketing surface.
+  It uses the existing graphite/lime instrument language, states the exact
+  ephemeral-retention boundary, and unlocks only after the server issues an
+  HttpOnly capability. It is absent in standalone mode.
 
 The generated visual concepts are design references only and are not shipped
 as product assets. Device shells are original CSS/HTML constructions and do not

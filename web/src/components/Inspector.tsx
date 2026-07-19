@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   BoardId,
@@ -44,6 +44,15 @@ export function Inspector({
 }: InspectorProps) {
   const [tab, setTab] = useState<InspectorTab>("inputs");
   const inputEnabled = session?.state === "running" && inputConnected;
+  const tabs = session?.anonymous
+    ? TABS.filter((candidate) => candidate.id === "inputs" || candidate.id === "power")
+    : TABS;
+
+  useEffect(() => {
+    if (session?.anonymous && (tab === "debug" || tab === "timeline")) {
+      setTab("inputs");
+    }
+  }, [session?.anonymous, tab]);
 
   function sendImu(sample: ImuSample) {
     sendBoardInput({ type: "imu", ...sample });
@@ -56,7 +65,7 @@ export function Inspector({
   return (
     <aside className="inspector" aria-label="Simulator inspector">
       <div className="inspector-tabs" role="tablist" aria-label="Inspector mode">
-        {TABS.map((candidate) => (
+        {tabs.map((candidate) => (
           <button
             aria-selected={tab === candidate.id}
             className="inspector-tab"

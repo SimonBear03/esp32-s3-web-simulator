@@ -54,6 +54,26 @@ export interface SimulationSession {
   generation: number;
   recording: RecordingSummary;
   replay: ReplaySummary;
+  anonymous?: boolean;
+  heartbeat_interval_seconds?: number;
+}
+
+export interface HostedAccessConfig {
+  enabled: boolean;
+  authorized: boolean;
+  access_kind: "account" | "anonymous" | null;
+  capability: boolean;
+  site_key: string | null;
+  action: string | null;
+  heartbeat_interval_seconds: number | null;
+  session_lifetime_seconds: number | null;
+}
+
+export interface AnonymousHeartbeat {
+  alive: boolean;
+  expires_at: number;
+  hard_expires_at: number;
+  heartbeat_deadline: number;
 }
 
 export interface RecordingSummary {

@@ -65,6 +65,9 @@ const runningSession = {
 };
 
 async function openWorkbench(page: Page): Promise<void> {
+  await page.route("**/anonymous/config", (route) =>
+    route.fulfill({ status: 404 }),
+  );
   await page.route("**/v1/boards", (route) =>
     route.fulfill({ json: boardProfiles }),
   );
@@ -184,4 +187,69 @@ test("shows recorded input, diagnostics, and replay in the inspector", async ({
   );
   await page.getByRole("button", { name: "Replay input" }).click();
   await expect(page.getByRole("button", { name: "Replaying…" })).toBeDisabled();
+});
+
+test("keeps hosted workbench locked until anonymous verification succeeds", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.addInitScript(() => {
+    const hosted = globalThis as unknown as {
+      __turnstileCallback?: (token: string) => void;
+      turnstile?: {
+        render: (
+          _container: unknown,
+          options: { callback: (token: string) => void },
+        ) => string;
+        reset: () => void;
+        remove: () => void;
+      };
+    };
+    hosted.turnstile = {
+      render: (_container, options) => {
+        hosted.__turnstileCallback = options.callback;
+        return "playwright-widget";
+      },
+      reset: () => undefined,
+      remove: () => undefined,
+    };
+  });
+  await page.route("**/anonymous/config", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        authorized: false,
+        access_kind: null,
+        capability: false,
+        site_key: "0x4AAAAA-browser-site-key",
+        action: "anonymous_session",
+        heartbeat_interval_seconds: 15,
+        session_lifetime_seconds: 180,
+      },
+    }),
+  );
+  await page.route("**/anonymous/capabilities", async (route) => {
+    expect((await route.request().postDataJSON()).token).toBe("playwright-token");
+    await route.fulfill({ status: 201, json: { anonymous: true, expires_at: 1234 } });
+  });
+  await page.route("**/v1/boards", (route) => route.fulfill({ json: boardProfiles }));
+  await page.goto("/");
+
+  const gate = page.getByRole("heading", {
+    name: "Verify to start a temporary simulator",
+  });
+  await expect(gate).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const panelBox = await page.locator(".access-gate-panel").boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect((panelBox?.x ?? 0) + (panelBox?.width ?? 0)).toBeLessThanOrEqual(390);
+  expect((panelBox?.y ?? 0) + (panelBox?.height ?? 0)).toBeLessThanOrEqual(844);
+  await page.evaluate(() => {
+    const hosted = globalThis as unknown as {
+      __turnstileCallback?: (token: string) => void;
+    };
+    hosted.__turnstileCallback?.("playwright-token");
+  });
+  await expect(gate).toBeHidden();
+  await expect(page.getByRole("button", { name: /Firmware setup/ })).toBeVisible();
 });

@@ -24,6 +24,25 @@ CSRF/origin policy, per-user quotas, rate limits, and keeping opaque session IDs
 bound to the account that created them. The public core service must not be
 exposed directly to the internet without that gateway or equivalent controls.
 
+For optional anonymous access, the browser receives only a public Turnstile
+site key. The gateway validates a single-use token through a separate,
+peer-credential-gated verifier process that alone holds the secret and internet
+egress. The main site retains loopback-only network policy. Anonymous
+capabilities are random HttpOnly, Secure, SameSite=Strict cookies; only their
+hashes and keyed-HMAC client scopes are stored. The gateway binds every
+operation and WebSocket to the capability, admits one active session per
+browser/network, shares the global account capacity atomically, and limits both
+challenge attempts and creation events. Cloudflare's connecting-IP header is
+trusted only when the immediate peer belongs to Cloudflare's published edge
+networks.
+
+Anonymous sessions have a deployment hard lifetime, require a periodic browser
+heartbeat, cannot be revived after inactivity, and are deleted by an
+independent reconciliation loop. The hosted anonymous surface omits debugger,
+diagnostics, and replay routes; signed-in accounts retain the full bounded
+tooling. Anonymous access stays disabled unless the verifier, OCI broker, core,
+and static workbench all pass readiness.
+
 ## Worker controls already enforced
 
 - guest networking is disabled;
@@ -75,6 +94,8 @@ rootless OCI boundary and containing service must prove:
   equivalent confinement layer;
 - automatic kill and cleanup independent of the API process;
 - upload, request, WebSocket, session, and account-level rate limits;
+- server-side challenge validation with exact hostname, action, and freshness;
+- anonymous heartbeat, hard-expiry, and abandoned-session cleanup;
 - structured security logs that never contain firmware or secret values.
 
 Direct worker mode is suitable for controlled local development, not public
