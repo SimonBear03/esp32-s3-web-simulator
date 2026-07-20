@@ -281,9 +281,9 @@ into generation 2 and reached the same NVS boot count of 3. These two runs are
 the release gate for bounded recording, per-source trace sampling, baseline
 restoration, timed external-input replay, and worker generation rollover.
 
-## 2026-07-19 current Cardputer Chess branch separation
+## 2026-07-19 historical Cardputer Chess branch separation
 
-The current Cardputer Chess `main` revision
+At that point, the Cardputer Chess `main` revision
 `5699ef4e5d0f0dc20d8b2775511a66ab4e81db04` built successfully, and its
 617712-byte merged image SHA-256 remained
 `2584687edc66495863c591ec7893331b15cc97aaf302c28c560a43c9ade93b4e`.
@@ -292,7 +292,7 @@ exactly across QMP reset, but entering a game reproduced its application-owned
 `loopTask` stack overflow. This image is therefore not a simulator release
 failure and is not described as the newest healthy application target.
 
-The newest remote repair branch `fix/cardputer-start-flicker` at unmodified
+The then-newest remote repair branch `fix/cardputer-start-flicker` at unmodified
 revision `85b2672de49581aa26951e31e930584b2b3a292b` built with 53.7% of
 configured RAM and 16.5% of configured flash. Its 618848-byte merged image had
 SHA-256
@@ -305,6 +305,62 @@ matched before and after QMP reset. Real Cardputer key events then completed a
 `4aa3c9b7c3b726174c16e84cba29158ee2a734def7eb6dc0d6f50a965be7171b`;
 the worker remained running and Enter returned to setup. No Chess firmware or
 build output is distributed by this repository.
+
+## 2026-07-20 current Cardputer Chess main and startup proof
+
+The current clean Cardputer Chess `main` revision
+`20da6c957c15c0e1ec79220f1d32a2885ac9a3b8` passed all 286 normal host tests
+and all 286 ASan/UBSan tests. Its PlatformIO `cardputer-adv` build used 178188
+of 327680 bytes of RAM (54.4%) and 555641 of 3342336 bytes of flash (16.6%).
+
+The application partition table places `app0` at `0x10000`. An initial
+disposable diagnostic image mistakenly placed `firmware.bin` at `0x20000`;
+QEMU correctly showed a black framebuffer and a tight `RTC_SW_SYS_RST` boot
+loop because the selected application slot was erased. Rebuilding the private
+test image with bootloader at `0x0`, partitions at `0x8000`, `boot_app0` at
+`0xe000`, and the application at `0x10000` produced a 621536-byte merged image
+with SHA-256:
+
+```text
+1a0334abc6db19b07637ad02aa6c70fb21969e2b183ab35a0189a893ce20a7a3
+```
+
+Byte comparisons verified the partition table, boot selector, and application
+at those offsets. The service normalized it to an 8 MiB private flash image
+with SHA-256
+`9bbae8293741f266de927dd4cc50daad510b73c24c16179604a3d5e79a18c287`.
+Neither image is committed or redistributed.
+
+The exact image then ran unmodified through the real service API inside a
+Bubblewrap worker with QMP, private GDB, native peripheral tracing, resource
+limits, and a hardened temporary systemd unit. The service did not expose the
+session until QMP returned `running`. The 240x135 setup framebuffer had SHA-256
+`75ea832b2870f737e912db49f542cb7ecff3b17b61cddfd18b89ae23b3c86233`.
+Real `S` press/release input moved the selection to Level and produced
+`624fdfcf7ddaf71c3cfbdbd28eeba28314a213706f6b0fe4c51c9e723daa7189`.
+Real `D` press/release changed the choice to `5 Strong` and produced
+`179cb28b610a6998b4f4f06880bc9e34dc1fb2d17613ca1b9b156f03c9083a63`.
+After QMP reset, visual inspection confirmed `5 Strong` remained selected in
+Preferences/NVS; the reset setup frame, whose highlight returned to the first
+row, was
+`4c744c212ee2c610c82787aeb04c476f1bc0fe2cc86fb3971d87084789c3ff59`.
+Enter then opened the game screen with framebuffer SHA-256
+`c6b8e3c30ada7b660e3bc475059b587662ad4c1d49b8a3cad0637870aa2fa8e4`.
+The worker remained `running` and the API deletion completed cleanly.
+
+The paginated bounded timeline contained 676 events. Native TCA8418 tracing
+recorded all six transitions: `S` as event code 17 down/up, `D` as code 23
+down/up, and Enter as code 67 down/up, each entering an empty FIFO before
+firmware consumption. UART showed one normal power-on boot and no panic or
+reset loop.
+
+This run also closed three simulator-owned startup defects. The manager now
+rejects runtime roots that cannot fit private Unix sockets, waits through only
+QEMU's bounded `prelaunch` transition before publishing a session, and fails
+closed while terminating an unready worker. Native trace output now uses the
+QEMU log backend's inherited stderr instead of reopening `/dev/stderr`, which
+fails when Uvicorn/uvloop supplies a socketpair. The high-volume trace reader
+also yields cooperatively so QMP control work cannot be starved.
 
 ## Evidence rules
 

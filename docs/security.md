@@ -17,7 +17,9 @@ directory. The runtime root and child process use owner-only permissions and a
 `077` umask. The GDB adapter permits only register reads, memory reads bounded to
 4096 bytes, 32 hardware breakpoints, continue through session resume, and
 single-step while paused. It has no raw-command tunnel and no register or memory
-write operation.
+write operation. Startup rejects a runtime root whose opaque session directory
+and socket filenames would exceed Linux's 107-byte Unix-socket path limit;
+sessions are never exposed as running before QMP confirms a live worker.
 
 The private deployment site is responsible for authentication, ownership,
 CSRF/origin policy, per-user quotas, rate limits, and keeping opaque session IDs

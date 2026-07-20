@@ -45,7 +45,7 @@ def test_worker_command_disables_network_and_exposes_qmp_and_serial() -> None:
     trace_options = [command[index + 1] for index, value in enumerate(command) if value == "-trace"]
     assert "enable=esp32s3_gpspi_transaction" in trace_options
     assert "enable=i2c_send" in trace_options
-    assert trace_options[-1] == "file=/dev/stderr"
+    assert all(not option.startswith("file=") for option in trace_options)
 
 
 def test_sticks3_worker_enables_eight_mebibytes_of_psram() -> None:

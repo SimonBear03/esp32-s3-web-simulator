@@ -38,10 +38,20 @@ that prohibit local socket binding; it is not a production configuration.
 operations; debugging also requires QMP so run state can remain synchronized.
 Neither private socket is part of the public protocol.
 
+Session creation does not report `running` merely because a worker process was
+spawned. The worker must answer private QMP `query-status` as running within
+`SIMULATOR_WORKER_STARTUP_TIMEOUT_SECONDS`; the legitimate `prelaunch` state is
+polled only until that bounded deadline. Invalid states, early exits, and QMP
+failure terminate the worker and fail session creation. The configured runtime
+root must also leave enough room for the opaque session directory and QMP/GDB
+names within Linux's 107-byte Unix-socket path limit.
+
 `GET /health/ready` reports `status`, `native_worker`, and
 `worker_sandbox` (`direct` or `bubblewrap`). Production sets
-`SIMULATOR_WORKER_SANDBOX_MODE=bubblewrap`; readiness degrades if the configured
-Bubblewrap executable or any required read-only runtime path is missing.
+`SIMULATOR_WORKER_SANDBOX_MODE=bubblewrap` is the controlled rollback boundary;
+the hostile public deployment uses `oci-broker`. Readiness degrades if the
+configured sandbox executable, broker socket, or any required read-only runtime
+path is missing.
 `SIMULATOR_WORKER_SANDBOX_READONLY_PATHS` is a colon-separated allow-list for
 the dynamic runtime and packaged QEMU dependencies. The worker executable
 directory and ROM directory are added automatically, while only the current

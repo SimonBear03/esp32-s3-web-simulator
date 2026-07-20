@@ -89,11 +89,12 @@ accept keyboard controls, preserve preferences across restarts, and support
 playing a complete game. Because that application is in progress, it does not
 replace the simulator-owned conformance firmware as the release gate.
 
-Unmodified application revisions have completed that milestone, most recently
-repair-branch revision `85b2672`: it preserved its saved level across a
-simulated reset and played through checkmate and back to setup. Exact evidence,
-including the separate currently failing application `main` revision, remains
-in `docs/conformance.md`; owned firmware continues to gate releases.
+Unmodified application revisions have completed that milestone. The current
+tested `main` revision `20da6c9` renders its setup and game screens, accepts
+real TCA8418 input, and preserves its selected level across simulated reset.
+Earlier revisions also played through checkmate and returned to setup. Exact
+current and historical evidence remains in `docs/conformance.md`; owned
+firmware continues to gate releases.
 
 The existing StickS3 companion is the second acceptance application for display,
 buttons, NVS, overlays, and graceful behavior when BLE is unavailable.

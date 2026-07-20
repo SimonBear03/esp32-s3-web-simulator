@@ -67,8 +67,9 @@ Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
 firmware has passed boot, virtual ST7789 rendering, TCA8418 input, persistent
 application NVS, embedded move search, checkmate, and return-to-setup proofs.
-The newest tested repair-branch revision is recorded separately from the
-currently failing application `main` revision in `docs/conformance.md`.
+The current tested `main` revision and its exact evidence are recorded in
+`docs/conformance.md`; historical application failures remain separated from
+simulator release failures there.
 
 ## Product Boundary
 
@@ -124,7 +125,7 @@ For local development, run the service on port 8000 and the Vite client on port
 4173 in separate shells. Vite proxies the versioned HTTP and WebSocket API:
 
 ```sh
-UV_CACHE_DIR=/tmp/esp32-s3-uv-cache uv run uvicorn simulator_service.app:app --reload
+UV_CACHE_DIR=/tmp/esp32-s3-uv-cache uv run uvicorn esp32_s3_simulator.api:app --app-dir src --reload
 cd web && npm run dev
 ```
 

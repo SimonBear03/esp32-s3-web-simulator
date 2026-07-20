@@ -110,7 +110,10 @@ def build_qemu_process_command(
     if trace_enabled:
         for event_name in TRACE_EVENT_NAMES:
             command.extend(("-trace", f"enable={event_name}"))
-        command.extend(("-trace", "file=/dev/stderr"))
+        # The compiled log trace backend writes to the inherited stderr stream
+        # by default.  Do not ask QEMU to reopen /dev/stderr: uvloop implements
+        # subprocess pipes with socketpairs, which cannot be reopened through
+        # /proc/self/fd and make QEMU exit with ENXIO during startup.
     if board.psram_size_mib:
         command.extend(("-m", f"{board.psram_size_mib}M"))
     command.extend(("-drive", f"file={flash_path},if=mtd,format=raw"))

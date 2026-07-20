@@ -13,6 +13,7 @@ from esp32_s3_simulator.boards import CARDPUTER_ADV, STICKS3, BoardProfile
 from esp32_s3_simulator.firmware import ValidatedFirmware
 from esp32_s3_simulator.framebuffer import RGBFrame, parse_framebuffer_packet
 from esp32_s3_simulator.gdb import GdbRemoteError
+from esp32_s3_simulator.qmp import QmpUnavailableError
 from esp32_s3_simulator.recording import ReplayAction
 from esp32_s3_simulator.sessions import (
     MAX_DEBUG_BREAKPOINTS,
@@ -20,6 +21,7 @@ from esp32_s3_simulator.sessions import (
     SessionRecord,
     SessionState,
     SessionTransitionError,
+    WorkerUnavailableError,
 )
 from esp32_s3_simulator.settings import Settings
 
@@ -59,6 +61,162 @@ def manager_with_session(
     )
     manager._sessions[session.id] = session
     return manager, session
+
+
+async def test_manager_rejects_runtime_root_that_cannot_fit_private_sockets(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        runtime_root=tmp_path / ("runtime-" + "x" * 80),
+        qemu_executable=tmp_path / "qemu",
+        rom_directory=tmp_path / "roms",
+        native_workers_enabled=True,
+    )
+
+    with pytest.raises(WorkerUnavailableError, match="too long"):
+        await SessionManager(settings).start()
+
+
+class FakeWorkerProcess:
+    def __init__(self) -> None:
+        self.stdin = None
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self._returncode: int | None = None
+        self._waiter = asyncio.Event()
+        self.terminated = False
+
+    @property
+    def returncode(self) -> int | None:
+        return self._returncode
+
+    async def wait(self) -> int:
+        await self._waiter.wait()
+        assert self._returncode is not None
+        return self._returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._finish(-15)
+
+    def kill(self) -> None:
+        self._finish(-9)
+
+    def _finish(self, returncode: int) -> None:
+        if self._returncode is not None:
+            return
+        self._returncode = returncode
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
+        self._waiter.set()
+
+
+def prepare_launch_manager(
+    manager: SessionManager,
+    tmp_path: Path,
+    *,
+    startup_timeout_seconds: float = 4.25,
+) -> tuple[SessionManager, SessionRecord]:
+    qemu = tmp_path / "qemu"
+    qemu.touch(mode=0o700)
+    (tmp_path / "roms").mkdir()
+    manager._settings = Settings(
+        runtime_root=tmp_path,
+        qemu_executable=qemu,
+        rom_directory=tmp_path / "roms",
+        native_workers_enabled=True,
+        worker_startup_timeout_seconds=startup_timeout_seconds,
+    )
+    return manager, manager.get("session-id")
+
+
+async def test_launch_waits_for_running_qmp_before_exposing_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, _session = manager_with_session(tmp_path)
+    manager, session = prepare_launch_manager(manager, tmp_path)
+    session.state = SessionState.STARTING
+    process = FakeWorkerProcess()
+    calls: list[tuple[str, float]] = []
+
+    async def launch_local_worker(*_args: object) -> FakeWorkerProcess:
+        return process
+
+    async def execute_qmp(
+        _socket: Path,
+        command: str,
+        _arguments: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        assert session.state is SessionState.STARTING
+        calls.append((command, timeout_seconds))
+        if len(calls) == 1:
+            return {"running": False, "status": "prelaunch"}
+        return {"running": True, "status": "running"}
+
+    monkeypatch.setattr(manager, "_launch_local_worker", launch_local_worker)
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+
+    await manager._launch(session)
+
+    assert [command for command, _timeout in calls] == ["query-status", "query-status"]
+    assert all(0 < timeout <= 1 for _command, timeout in calls)
+    assert session.state is SessionState.RUNNING
+    assert session.process is process
+    await manager._terminate_worker(session)
+
+
+async def test_launch_terminates_worker_when_qmp_never_becomes_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager, _session = manager_with_session(tmp_path)
+    manager, session = prepare_launch_manager(
+        manager,
+        tmp_path,
+        startup_timeout_seconds=0.02,
+    )
+    session.state = SessionState.STARTING
+    process = FakeWorkerProcess()
+
+    async def launch_local_worker(*_args: object) -> FakeWorkerProcess:
+        return process
+
+    async def execute_qmp(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise QmpUnavailableError("private socket detail")
+
+    monkeypatch.setattr(manager, "_launch_local_worker", launch_local_worker)
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+
+    with pytest.raises(
+        WorkerUnavailableError,
+        match="failed its startup readiness check",
+    ) as caught:
+        await manager._launch(session)
+
+    assert "private socket detail" not in str(caught.value)
+    assert "cause=WorkerUnavailableError" in caplog.text
+    assert "private socket detail" not in caplog.text
+    assert process.terminated is True
+    assert session.process is None
+
+
+async def test_worker_exit_during_startup_marks_session_failed(tmp_path: Path) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.state = SessionState.STARTING
+    session.initial_flash_image = b"private-firmware"
+    process = FakeWorkerProcess()
+    session.process = process
+    process._finish(1)
+
+    await manager._read_serial(session, process)
+
+    assert session.state is SessionState.FAILED
+    assert session.exit_code == 1
+    assert session.initial_flash_image == b""
+    assert not session.runtime_directory.exists()
 
 
 async def test_qmp_controls_enforce_and_update_session_state(
@@ -230,6 +388,30 @@ async def test_worker_peripheral_trace_is_parsed_and_capped(tmp_path: Path) -> N
         "peripheral.gpio.input",
         "peripheral.trace.truncated",
     ]
+
+
+async def test_noisy_trace_reader_yields_to_worker_control_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    stream = asyncio.StreamReader()
+    for _ in range(sessions_module.TRACE_READER_YIELD_LINES * 2):
+        stream.feed_data(b"unrecognized_worker_noise\n")
+    stream.feed_eof()
+    original_sleep = asyncio.sleep
+    cooperative_yields = 0
+
+    async def sleep(delay: float) -> None:
+        nonlocal cooperative_yields
+        assert delay == 0
+        cooperative_yields += 1
+        await original_sleep(0)
+
+    monkeypatch.setattr(sessions_module.asyncio, "sleep", sleep)
+
+    await manager._read_worker_trace(session, stream)
+
+    assert cooperative_yields == 2
 
 
 async def test_noisy_worker_trace_is_sampled_without_hiding_later_inputs(

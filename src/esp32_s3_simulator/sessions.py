@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 import asyncio
+import logging
 import os
 import resource
 import shutil
@@ -34,6 +35,8 @@ from .settings import Settings
 from .tracing import TRACE_EVENT_LIMITS, parse_worker_trace_line
 from .worker_process import WorkerProcess
 
+logger = logging.getLogger(__name__)
+
 
 class SessionCapacityError(RuntimeError):
     pass
@@ -64,6 +67,8 @@ ACTIVE_SESSION_STATES = frozenset(
     {SessionState.STARTING, SessionState.RUNNING, SessionState.PAUSED}
 )
 MAX_DEBUG_BREAKPOINTS = 32
+MAX_UNIX_SOCKET_PATH_BYTES = 107
+TRACE_READER_YIELD_LINES = 64
 
 
 @dataclass(slots=True, eq=False)
@@ -187,6 +192,19 @@ class SessionManager:
         )
 
     async def start(self) -> None:
+        if self._settings.native_workers_enabled and self._settings.worker_qmp_enabled:
+            socket_paths = [
+                self._settings.runtime_root / ("0" * 32) / "qmp.sock",
+            ]
+            if self._settings.worker_debug_enabled:
+                socket_paths.append(self._settings.runtime_root / ("0" * 32) / "gdb.sock")
+            if any(
+                len(os.fsencode(str(path.absolute()))) > MAX_UNIX_SOCKET_PATH_BYTES
+                for path in socket_paths
+            ):
+                raise WorkerUnavailableError(
+                    "simulator runtime root is too long for private worker sockets"
+                )
         self._settings.runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         runtime_root_stat = self._settings.runtime_root.lstat()
         if not stat.S_ISDIR(runtime_root_stat.st_mode) or runtime_root_stat.st_uid != os.getuid():
@@ -918,12 +936,68 @@ class SessionManager:
         else:
             process = await self._launch_local_worker(worker_config, session)
         session.process = process
-        session.state = SessionState.RUNNING
         session.reader_task = asyncio.create_task(self._read_serial(session, process))
         if process.stderr:
             session.trace_reader_task = asyncio.create_task(
                 self._read_worker_trace(session, process.stderr)
             )
+        try:
+            if self._settings.worker_qmp_enabled:
+                await self._wait_for_qmp_running(session, process)
+            if (
+                session.process is not process
+                or process.returncode is not None
+                or session.state is not SessionState.STARTING
+            ):
+                raise WorkerUnavailableError("simulator worker exited during startup")
+        except (QmpError, WorkerUnavailableError) as error:
+            logger.warning(
+                "simulator worker startup readiness failed (cause=%s, worker_returncode=%s)",
+                type(error).__name__,
+                process.returncode,
+            )
+            await self._terminate_worker(session)
+            raise WorkerUnavailableError(
+                "simulator worker failed its startup readiness check"
+            ) from error
+        session.state = SessionState.RUNNING
+
+    async def _wait_for_qmp_running(self, session: SessionRecord, process: WorkerProcess) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._settings.worker_startup_timeout_seconds
+        last_unavailable: QmpUnavailableError | None = None
+        while (remaining := deadline - loop.time()) > 0:
+            if process.returncode is not None:
+                raise WorkerUnavailableError("simulator worker exited during startup")
+            try:
+                status = await execute_qmp(
+                    session.qmp_socket_path,
+                    "query-status",
+                    timeout_seconds=min(1.0, remaining),
+                )
+            except QmpUnavailableError as error:
+                last_unavailable = error
+            else:
+                if (
+                    isinstance(status, dict)
+                    and status.get("running") is True
+                    and status.get("status") == "running"
+                ):
+                    return
+                if not (
+                    isinstance(status, dict)
+                    and status.get("running") is False
+                    and status.get("status") == "prelaunch"
+                ):
+                    raise WorkerUnavailableError(
+                        "simulator worker reported an invalid startup state"
+                    )
+            remaining = deadline - loop.time()
+            if remaining > 0:
+                await asyncio.sleep(min(0.05, remaining))
+        raise WorkerUnavailableError(
+            "simulator worker did not become ready before the startup deadline"
+        ) from last_unavailable
 
     async def _launch_local_worker(
         self, worker_config: QemuWorkerConfig, session: SessionRecord
@@ -957,7 +1031,11 @@ class SessionManager:
     async def _read_worker_trace(
         self, session: SessionRecord, stream: asyncio.StreamReader
     ) -> None:
+        lines_read = 0
         while line := await stream.readline():
+            lines_read += 1
+            if lines_read % TRACE_READER_YIELD_LINES == 0:
+                await asyncio.sleep(0)
             parsed = parse_worker_trace_line(line)
             if parsed is None:
                 continue
@@ -1014,7 +1092,11 @@ class SessionManager:
             await asyncio.gather(trace_reader_task, return_exceptions=True)
         session.exit_code = exit_code
         await self._close_debugger(session)
-        if session.state in {SessionState.RUNNING, SessionState.PAUSED}:
+        if session.state in {
+            SessionState.STARTING,
+            SessionState.RUNNING,
+            SessionState.PAUSED,
+        }:
             session.state = SessionState.STOPPED if session.exit_code == 0 else SessionState.FAILED
         self._record_event(
             session,

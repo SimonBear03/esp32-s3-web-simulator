@@ -31,6 +31,7 @@ class Settings:
     session_ttl_seconds: int = 120
     worker_memory_limit_mib: int = 1536
     worker_cpu_limit_seconds: int = 90
+    worker_startup_timeout_seconds: float = 10.0
     framebuffer_interval_ms: int = 100
     max_recording_events: int = 4096
     max_event_page_size: int = 500
@@ -91,6 +92,9 @@ class Settings:
             ),
             worker_cpu_limit_seconds=int(
                 os.environ.get("SIMULATOR_WORKER_CPU_LIMIT_SECONDS", "90")
+            ),
+            worker_startup_timeout_seconds=float(
+                os.environ.get("SIMULATOR_WORKER_STARTUP_TIMEOUT_SECONDS", "10")
             ),
             framebuffer_interval_ms=int(os.environ.get("SIMULATOR_FRAMEBUFFER_INTERVAL_MS", "100")),
             max_recording_events=int(os.environ.get("SIMULATOR_MAX_RECORDING_EVENTS", "4096")),

@@ -24,8 +24,10 @@ def _file(path: Path, payload: str, mode: int) -> Path:
     return path
 
 
-def _broker_settings(tmp_path: Path) -> OciBrokerSettings:
-    runtime_root = tmp_path / "runtime"
+def _broker_settings(
+    tmp_path: Path, *, runtime_root: Path | None = None
+) -> OciBrokerSettings:
+    runtime_root = runtime_root or tmp_path / "runtime"
     runtime_root.mkdir(mode=0o770)
     runtime_root.chmod(0o770)
     socket_parent = tmp_path / "broker"
@@ -106,8 +108,11 @@ async def test_broker_runtime_verification_fails_without_rootless_mode(tmp_path:
         await broker.verify_runtime()
 
 
-async def test_session_manager_uses_broker_without_docker_authority(tmp_path: Path) -> None:
-    broker_settings = _broker_settings(tmp_path)
+async def test_session_manager_uses_broker_without_docker_authority(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    runtime_root = tmp_path_factory.getbasetemp() / "core-runtime"
+    broker_settings = _broker_settings(tmp_path, runtime_root=runtime_root)
     core_settings = Settings(
         runtime_root=broker_settings.runtime_root,
         qemu_executable=tmp_path / "not-used-qemu",
@@ -116,6 +121,7 @@ async def test_session_manager_uses_broker_without_docker_authority(tmp_path: Pa
         worker_sandbox_mode=WorkerSandboxMode.OCI_BROKER,
         worker_broker_socket=broker_settings.socket_path,
         worker_shared_group_gid=os.getgid(),
+        worker_qmp_enabled=False,
     )
     manager = SessionManager(core_settings)
     await manager.start()

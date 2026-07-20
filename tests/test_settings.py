@@ -16,6 +16,7 @@ def test_settings_parse_production_worker_sandbox(monkeypatch: pytest.MonkeyPatc
         "SIMULATOR_WORKER_SANDBOX_READONLY_PATHS",
         "/usr:/lib:/opt/simulator",
     )
+    monkeypatch.setenv("SIMULATOR_WORKER_STARTUP_TIMEOUT_SECONDS", "7.5")
 
     settings = Settings.from_environment()
 
@@ -26,6 +27,7 @@ def test_settings_parse_production_worker_sandbox(monkeypatch: pytest.MonkeyPatc
         Path("/lib"),
         Path("/opt/simulator"),
     )
+    assert settings.worker_startup_timeout_seconds == 7.5
 
 
 def test_settings_reject_unknown_worker_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
