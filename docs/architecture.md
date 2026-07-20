@@ -109,7 +109,8 @@ The product currently exposes:
 - single-step and synchronized debugger stop state through private GDB
   integration;
 - browser-only Xtensa ELF function symbols for pasted panic/backtrace addresses
-  and the paused program counter; the ELF is never uploaded or saved;
+  the paused program counter, and addresses in the bounded live UART tail; the
+  ELF is never uploaded or saved;
 - bounded typed event recording and privacy-preserving diagnostics;
 - native SPI, I2C, GPIO, display, input, IMU, power, and ADC traces;
 - deterministic external-input replay from the uploaded flash/NVS baseline.

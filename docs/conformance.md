@@ -385,6 +385,14 @@ types, escaped section tables, and unbounded section counts are rejected before
 symbol-table traversal. No ELF bytes, names, or decoded addresses enter the
 service, gateway, saved-app store, diagnostics, or backup paths.
 
+A routed browser-only UART WebSocket then supplied an ESP-style panic line with
+two real executable addresses from the same ELF. The bounded live console
+resolved `0x4200fee5` to `rtc_gpio_is_valid_gpio+0x1` and `0x42010065` to
+`gpio_od_enable+0x1` automatically, while ignoring unresolved stack addresses.
+The compact resolved-address strip passed the same desktop and 390-pixel mobile
+layouts without overflow. This fixture proves browser integration and does not
+claim the current Chess application emitted a panic.
+
 ## Evidence rules
 
 - Record the exact QEMU commit, patch set, firmware source revision, build

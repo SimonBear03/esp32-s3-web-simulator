@@ -172,6 +172,11 @@ usable with an explicit “match unavailable” state. The ELF does not enter
 multipart session creation, saved-app storage, diagnostics, replay, gateway
 logs, or backups.
 
+The serial console scans only its most recent 16 KiB of already-rendered UART
+text and resolves at most the same 64 unique 32-bit addresses as the manual
+decoder. Resolved function-plus-offset rows are browser-derived presentation;
+they are not added to the server timeline, diagnostics, or UART stream.
+
 If the guest reaches a breakpoint after resume, its state changes back to
 `paused` and `debug/status` reports the stop reply. Clients should poll session
 or debug status until the later event-stream protocol is implemented.

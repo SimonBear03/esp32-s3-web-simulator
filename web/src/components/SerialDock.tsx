@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { ChevronDown, Terminal, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Braces, ChevronDown, Terminal, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { openSessionSocket } from "../lib/api";
+import { decodeBacktrace, type ElfSymbolIndex } from "../lib/elf";
 
 interface SerialDockProps {
   sessionId: string | null;
   streamGeneration: number;
+  symbols: ElfSymbolIndex | null;
 }
 
 const MAX_SERIAL_CHARACTERS = 96 * 1024;
+const MAX_SYMBOL_SCAN_CHARACTERS = 16 * 1024;
 
 async function serialChunk(data: unknown, decoder: TextDecoder): Promise<string> {
   if (typeof data === "string") return data;
@@ -19,7 +22,7 @@ async function serialChunk(data: unknown, decoder: TextDecoder): Promise<string>
   return "";
 }
 
-export function SerialDock({ sessionId, streamGeneration }: SerialDockProps) {
+export function SerialDock({ sessionId, streamGeneration, symbols }: SerialDockProps) {
   const [text, setText] = useState("");
   const [follow, setFollow] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
@@ -29,6 +32,15 @@ export function SerialDock({ sessionId, streamGeneration }: SerialDockProps) {
   const pendingRef = useRef("");
   const flushTimerRef = useRef<number | null>(null);
   const outputRef = useRef<HTMLPreElement>(null);
+  const resolvedAddresses = useMemo(
+    () =>
+      symbols
+        ? decodeBacktrace(text.slice(-MAX_SYMBOL_SCAN_CHARACTERS), symbols).filter(
+            (result) => result.symbol !== null,
+          )
+        : [],
+    [symbols, text],
+  );
 
   useEffect(() => {
     setText("");
@@ -125,6 +137,27 @@ export function SerialDock({ sessionId, streamGeneration }: SerialDockProps) {
           {text ||
             "[simulator] Select a board, validate a merged firmware image, and start a session.\n[simulator] UART output will stream here without persisting to disk."}
         </pre>
+        {resolvedAddresses.length ? (
+          <aside className="serial-symbols" aria-label="Resolved UART addresses">
+            <header>
+              <span>
+                <Braces size={13} aria-hidden="true" />
+                Resolved UART addresses
+              </span>
+              <small>{resolvedAddresses.length}</small>
+            </header>
+            <ul>
+              {resolvedAddresses.map((result) => (
+                <li key={result.address}>
+                  <code>0x{result.address.toString(16).padStart(8, "0")}</code>
+                  <span>
+                    {result.symbol}+0x{(result.offset ?? 0).toString(16)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        ) : null}
         <form
           className="serial-input"
           onSubmit={(event) => {

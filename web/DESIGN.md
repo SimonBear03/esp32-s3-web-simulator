@@ -31,7 +31,8 @@ runtime inspector, and the serial dock.
   buttons.
 - `Inspector` owns typed board inputs, browser-only backtrace symbolication, and
   bounded debugger controls. It never exposes raw QMP or GDB.
-- `SerialDock` owns the bounded UART transcript and command input.
+- `SerialDock` owns the bounded UART transcript, command input, and a compact
+  browser-derived strip for function addresses found in the recent UART tail.
 - At desktop widths the workbench is a three-column open grid above a docked
   serial region. At narrow widths setup becomes a disclosure and Device,
   Serial, and Inspector become mutually exclusive primary panels.

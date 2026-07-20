@@ -181,7 +181,11 @@ export function App() {
       </div>
 
       <div className="serial-region" data-mobile-active={mobilePanel === "serial"}>
-        <SerialDock sessionId={sessionId} streamGeneration={streamGeneration} />
+        <SerialDock
+          sessionId={sessionId}
+          streamGeneration={streamGeneration}
+          symbols={debugSymbols}
+        />
       </div>
       <MobilePanelNav onChange={setMobilePanel} panel={mobilePanel} />
       <StatusBar inputConnected={inputConnected} expiresAt={session?.expires_at ?? null} />

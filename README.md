@@ -48,6 +48,8 @@ The browser validates and indexes that ELF locally, keeps it out of every HTTP
 request and saved-app slot, and can decode pasted panic/backtrace addresses
 plus the paused program counter. For ESP-IDF images it compares the ELF SHA-256
 against the application descriptor and blocks a mismatched symbol build.
+Resolved function addresses also appear automatically beneath the bounded live
+UART transcript when matching symbols are active.
 Production workers can run inside the tested
 Bubblewrap boundary. The selected hostile
 internet boundary is now implemented as a peer-credential-gated broker in
