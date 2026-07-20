@@ -35,6 +35,11 @@ The source build is pinned and reproducible. Operators obtain upstream inputs
 from their owners and must review those owners' terms before redistributing a
 combined deployment artifact. `THIRD_PARTY.md` is the authoritative ledger.
 
+The optional debug-symbol ELF is selected and parsed entirely in the user's
+browser. It is not transferred to the public service or private site, and its
+function names remain page-memory-only. This privacy boundary does not alter
+the ELF or firmware owner's licence.
+
 The rootless worker build may create an operator-local image from a separately
 supplied ROM and its reviewed digest. That private runtime artifact is not a
 repository distribution. Publishing or transferring it is a separate action

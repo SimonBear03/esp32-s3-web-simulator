@@ -20,6 +20,7 @@
   --accent-strong: #bbef45;
   --accent-dark: #24330c;
   --amber: #f2ad32;
+  --cyan: #62bfd1;
   --red: #e66b62;
   --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
   --header-height: 58px;
@@ -641,6 +642,63 @@ output {
   color: var(--text-muted);
   font-family: var(--mono);
   font-size: 9px;
+}
+
+.symbols-upload {
+  display: grid;
+  gap: 7px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.symbols-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.symbols-picker svg {
+  color: var(--cyan);
+}
+
+.symbols-picker small {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.symbols-picker[data-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.symbol-file {
+  margin-top: 0;
+}
+
+.symbol-file > svg {
+  color: var(--red);
+}
+
+.symbol-file[data-valid="true"] > svg {
+  color: var(--cyan);
+}
+
+.symbols-privacy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 8.5px;
+  line-height: 1.45;
 }
 
 .validation-list {
@@ -1840,11 +1898,26 @@ output {
   font-size: 10px;
 }
 
-.pc-value > code {
+.pc-value > div {
   min-width: 0;
   flex: 1;
+}
+
+.pc-value > div > code {
+  display: block;
   color: var(--text);
   font-size: 12px;
+}
+
+.pc-value > div > small {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pc-value .secondary-button {
@@ -1855,6 +1928,132 @@ output {
 
 .debug-section .rail-heading {
   margin-bottom: 9px;
+}
+
+.debug-worker-empty {
+  min-height: 220px;
+}
+
+.symbol-decoder {
+  background: #0c1113;
+}
+
+.symbol-heading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.symbol-heading > div {
+  display: grid;
+}
+
+.symbol-heading .rail-heading {
+  margin-bottom: 3px;
+}
+
+.symbol-heading strong {
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 500;
+}
+
+.symbol-heading > svg {
+  color: var(--cyan);
+}
+
+.symbol-contract {
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.pc-symbol {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 8.5px;
+}
+
+.pc-symbol code {
+  overflow: hidden;
+  color: var(--cyan);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.symbol-decoder textarea {
+  width: 100%;
+  min-height: 68px;
+  padding: 8px;
+  margin-top: 10px;
+  resize: vertical;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: 0;
+  background: var(--surface-deep);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.symbol-decoder textarea:focus {
+  border-color: var(--cyan);
+}
+
+.symbol-results {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+}
+
+.symbol-results li {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 7px;
+  padding: 5px 6px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--surface-deep);
+}
+
+.symbol-results li[data-resolved="true"] {
+  border-color: var(--accent);
+}
+
+.symbol-results code,
+.symbol-results span {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.symbol-results code {
+  color: var(--text-muted);
+}
+
+.symbol-results span {
+  color: var(--text-secondary);
+}
+
+.symbol-results li[data-resolved="true"] span {
+  color: var(--accent);
+}
+
+.symbol-results .symbol-empty {
+  display: block;
+  color: var(--text-muted);
+  font-size: 8.5px;
 }
 
 .register-grid {

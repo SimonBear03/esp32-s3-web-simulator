@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import type { ElfSymbolIndex } from "../lib/elf";
 import type {
   BoardId,
   ImuSample,
@@ -24,6 +25,7 @@ type InputEventWithoutSequence = InputEvent extends infer Event
 
 interface InspectorProps {
   boardId: BoardId;
+  debugSymbols: ElfSymbolIndex | null;
   session: SimulationSession | null;
   inputConnected: boolean;
   sendBoardInput: (event: InputEventWithoutSequence) => boolean;
@@ -38,6 +40,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
 
 export function Inspector({
   boardId,
+  debugSymbols,
   session,
   inputConnected,
   sendBoardInput,
@@ -45,14 +48,22 @@ export function Inspector({
   const [tab, setTab] = useState<InspectorTab>("inputs");
   const inputEnabled = session?.state === "running" && inputConnected;
   const tabs = session?.anonymous
-    ? TABS.filter((candidate) => candidate.id === "inputs" || candidate.id === "power")
+    ? TABS.filter(
+        (candidate) =>
+          candidate.id === "inputs" ||
+          candidate.id === "power" ||
+          (candidate.id === "debug" && debugSymbols !== null),
+      )
     : TABS;
 
   useEffect(() => {
-    if (session?.anonymous && (tab === "debug" || tab === "timeline")) {
+    if (
+      session?.anonymous &&
+      (tab === "timeline" || (tab === "debug" && debugSymbols === null))
+    ) {
       setTab("inputs");
     }
-  }, [session?.anonymous, tab]);
+  }, [debugSymbols, session?.anonymous, tab]);
 
   function sendImu(sample: ImuSample) {
     sendBoardInput({ type: "imu", ...sample });
@@ -89,7 +100,9 @@ export function Inspector({
             onImu={sendImu}
           />
         ) : null}
-        {tab === "debug" ? <DebugInspector session={session} /> : null}
+        {tab === "debug" ? (
+          <DebugInspector session={session} symbols={debugSymbols} />
+        ) : null}
         {tab === "power" ? (
           <PowerInspector
             boardId={boardId}

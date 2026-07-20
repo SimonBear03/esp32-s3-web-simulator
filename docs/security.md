@@ -51,7 +51,9 @@ Anonymous sessions have a deployment hard lifetime, require a periodic browser
 heartbeat, cannot be revived after inactivity, and are deleted by an
 independent reconciliation loop. The hosted anonymous surface omits debugger,
 diagnostics, and replay routes; signed-in accounts retain the full bounded
-tooling. Anonymous access stays disabled unless the verifier, OCI broker, core,
+worker tooling. A browser-only ELF decoder may still appear for an anonymous
+session because it sends neither the ELF nor decoded addresses to the gateway
+or core. Anonymous access stays disabled unless the verifier, OCI broker, core,
 and static workbench all pass readiness.
 
 Optional saved-app storage belongs to the private gateway, not this public core.
@@ -126,8 +128,10 @@ automatic availability fallback for anonymous sessions.
 
 The default contract is ephemeral: uploaded firmware, its in-memory replay
 baseline, recorded UART payloads, and mutated flash/NVS are destroyed with the
-session. Diagnostics are explicit, access-controlled by the hosting gateway,
-size-bounded, and exclude firmware, mutated flash, framebuffer pixels, debug
+session. An optional symbol ELF has a stricter boundary: it is parsed in the
+browser, is never uploaded, and its in-memory index is dropped when the session
+ends or the page closes. Diagnostics are explicit, access-controlled by the
+hosting gateway, size-bounded, and exclude firmware, mutated flash, framebuffer pixels, debug
 memory, and UART payloads. The replay baseline and private UART actions never
 cross the public API.
 

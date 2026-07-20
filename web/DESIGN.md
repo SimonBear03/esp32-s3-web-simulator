@@ -23,12 +23,13 @@ runtime inspector, and the serial dock.
 - `AppHeader` owns board selection, authoritative run state, and session
   controls.
 - `FirmwarePanel` performs accurate local merged-image checks and starts the
-  real API session.
+  real API session. Its optional matching ELF control indexes bounded Xtensa
+  function symbols locally and never adds the ELF to a network request.
 - `DeviceStage` owns the original compatible-device shells and a canvas-backed
   RGB framebuffer. The Cardputer keyboard and StickS3 buttons remain native
   buttons.
-- `Inspector` owns typed board inputs and bounded debugger controls. It never
-  exposes raw QMP or GDB.
+- `Inspector` owns typed board inputs, browser-only backtrace symbolication, and
+  bounded debugger controls. It never exposes raw QMP or GDB.
 - `SerialDock` owns the bounded UART transcript and command input.
 - At desktop widths the workbench is a three-column open grid above a docked
   serial region. At narrow widths setup becomes a disclosure and Device,

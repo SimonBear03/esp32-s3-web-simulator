@@ -42,8 +42,12 @@ traces, and deterministic external-input replay from the originally uploaded
 flash/NVS baseline. The debugger
 supports synchronized pause/resume, Xtensa register snapshots, memory reads,
 hardware breakpoints, and single-step on both profiles. QEMU's raw GDB socket
-remains private to each worker and is never proxied to a browser. Production
-workers can run inside the tested Bubblewrap boundary. The selected hostile
+remains private to each worker and is never proxied to a browser. The firmware
+rail also accepts an optional matching Xtensa ELF for function symbolication.
+The browser validates and indexes that ELF locally, keeps it out of every HTTP
+request and saved-app slot, and can decode pasted panic/backtrace addresses
+plus the paused program counter. Production workers can run inside the tested
+Bubblewrap boundary. The selected hostile
 internet boundary is now implemented as a peer-credential-gated broker in
 front of a dedicated rootless OCI daemon: the API never receives Docker
 authority, and each digest-pinned worker gets no network, a read-only root,

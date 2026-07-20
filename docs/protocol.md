@@ -159,6 +159,14 @@ unauthenticated GDB endpoint is attached only to a Unix socket inside the
 private session directory; the service translates this bounded API instead of
 exposing or tunnelling that socket.
 
+The workbench can optionally load the matching 32-bit little-endian Xtensa ELF
+next to the required merged flash image. This is deliberately not an API
+upload: the browser enforces a 32 MiB limit, parses a bounded executable symbol
+table, and retains only its in-memory index for the active page/session. Pasted
+panic/backtrace addresses and the paused program counter can then be resolved
+to function-plus-offset locally. The ELF does not enter multipart session
+creation, saved-app storage, diagnostics, replay, gateway logs, or backups.
+
 If the guest reaches a breakpoint after resume, its state changes back to
 `paused` and `debug/status` reports the stop reply. Clients should poll session
 or debug status until the later event-stream protocol is implemented.
@@ -213,6 +221,6 @@ determinism, or physical/electrical certification. Replays are bounded by
 
 ## Pending protocol surfaces
 
-Instruction/timing traces, source-symbol backtraces, and CPU-state rewind remain
-pending. They are not represented as fake-success events until their execution
-and privacy contracts exist.
+Instruction/timing traces, DWARF source file/line decoding, C++ demangling, and
+CPU-state rewind remain pending. They are not represented as fake-success
+events until their execution and privacy contracts exist.

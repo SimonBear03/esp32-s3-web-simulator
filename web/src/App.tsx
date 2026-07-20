@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { ChevronDown, X } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { AppHeader } from "./components/AppHeader";
 import { DeviceStage } from "./components/DeviceStage";
@@ -19,6 +19,7 @@ import { useHostedAccess } from "./hooks/useHostedAccess";
 import { useSavedApps } from "./hooks/useSavedApps";
 import { useSimulatorSession } from "./hooks/useSimulatorSession";
 import { shortBoardLabel } from "./lib/boards";
+import type { ElfSymbolIndex } from "./lib/elf";
 import type { BoardId } from "./lib/types";
 
 export function App() {
@@ -27,6 +28,7 @@ export function App() {
   const [boardId, setBoardId] = useState<BoardId>("cardputer-adv");
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("device");
   const [setupOpen, setSetupOpen] = useState(false);
+  const [debugSymbols, setDebugSymbols] = useState<ElfSymbolIndex | null>(null);
   const {
     session,
     busyAction,
@@ -52,6 +54,16 @@ export function App() {
   const sessionId = active && session ? session.id : null;
   const streamGeneration = active && session ? session.generation : 0;
   const inputEnabled = session?.state === "running" && inputConnected;
+
+  useEffect(() => {
+    if (
+      debugSymbols &&
+      session &&
+      !["starting", "running", "paused"].includes(session.state)
+    ) {
+      setDebugSymbols(null);
+    }
+  }, [debugSymbols, session]);
 
   const onKey = useCallback(
     (key: string, pressed: boolean) => {
@@ -82,7 +94,9 @@ export function App() {
         onPause={() => void pause()}
         onReset={() => void reset()}
         onResume={() => void resume()}
-        onStop={() => void stop()}
+        onStop={() => {
+          void stop().finally(() => setDebugSymbols(null));
+        }}
         onSignOut={() => void hostedAccess.signOut()}
         signingOut={hostedAccess.submitting}
         sessionState={session?.state ?? "idle"}
@@ -117,7 +131,7 @@ export function App() {
         <div className="setup-region" data-mobile-open={setupOpen}>
           <FirmwarePanel
             board={board}
-            onStart={async (file) => {
+            onStart={async (file, symbols) => {
               if (
                 hostedAccess.state !== "standalone" &&
                 hostedAccess.state !== "authorized"
@@ -125,12 +139,14 @@ export function App() {
                 return;
               }
               if (await start(boardId, file)) {
+                setDebugSymbols(symbols);
                 setSetupOpen(false);
                 setMobilePanel("device");
               }
             }}
             onRunSaved={async (saved) => {
               if (active || (await startSaved(saved.id)) === false) return;
+              setDebugSymbols(null);
               setBoardId(saved.board_id);
               setSetupOpen(false);
               setMobilePanel("device");
@@ -156,6 +172,7 @@ export function App() {
         >
           <Inspector
             boardId={boardId}
+            debugSymbols={debugSymbols}
             inputConnected={inputConnected}
             sendBoardInput={sendBoardInput}
             session={session}

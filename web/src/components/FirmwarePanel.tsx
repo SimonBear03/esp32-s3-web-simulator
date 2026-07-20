@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { Check, FileCode2, Upload, X } from "lucide-react";
+import { Check, FileCode2, FileSearch, Upload, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { SavedAppsController } from "../hooks/useSavedApps";
@@ -9,6 +9,11 @@ import {
   inspectFirmware,
   type FirmwareInspection,
 } from "../lib/firmware";
+import {
+  inspectElfSymbols,
+  MAX_ELF_SYMBOL_FILE_BYTES,
+  type ElfSymbolIndex,
+} from "../lib/elf";
 import type { BoardProfile, SavedApp, SimulationSession } from "../lib/types";
 import { SavedAppsSection } from "./SavedAppsSection";
 
@@ -16,7 +21,7 @@ interface FirmwarePanelProps {
   board: BoardProfile;
   session: SimulationSession | null;
   starting: boolean;
-  onStart: (file: File) => Promise<void>;
+  onStart: (file: File, symbols: ElfSymbolIndex | null) => Promise<void>;
   savedApps: SavedAppsController | null;
   onRunSaved: (app: SavedApp) => Promise<void>;
 }
@@ -30,11 +35,30 @@ export function FirmwarePanel({
   onRunSaved,
 }: FirmwarePanelProps) {
   const inputId = useId();
+  const symbolsInputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  const symbolsInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [inspection, setInspection] = useState<FirmwareInspection | null>(null);
+  const [symbolsFile, setSymbolsFile] = useState<File | null>(null);
+  const [symbols, setSymbols] = useState<ElfSymbolIndex | null>(null);
+  const [symbolsError, setSymbolsError] = useState<string | null>(null);
+  const [symbolsLoading, setSymbolsLoading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const active = session && ["starting", "running", "paused"].includes(session.state);
+  const active = Boolean(
+    session && ["starting", "running", "paused"].includes(session.state),
+  );
+  const wasActive = useRef(false);
+
+  useEffect(() => {
+    if (wasActive.current && !active) {
+      setSymbolsFile(null);
+      setSymbols(null);
+      setSymbolsError(null);
+      if (symbolsInputRef.current) symbolsInputRef.current.value = "";
+    }
+    wasActive.current = active;
+  }, [active]);
 
   useEffect(() => {
     if (!file) {
@@ -49,6 +73,36 @@ export function FirmwarePanel({
       current = false;
     };
   }, [board, file]);
+
+  useEffect(() => {
+    if (!symbolsFile) {
+      setSymbols(null);
+      setSymbolsError(null);
+      setSymbolsLoading(false);
+      return;
+    }
+    let current = true;
+    setSymbols(null);
+    setSymbolsError(null);
+    setSymbolsLoading(true);
+    void inspectElfSymbols(symbolsFile)
+      .then((next) => {
+        if (current) setSymbols(next);
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          setSymbolsError(
+            error instanceof Error ? error.message : "ELF symbols could not be read",
+          );
+        }
+      })
+      .finally(() => {
+        if (current) setSymbolsLoading(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [symbolsFile]);
 
   function acceptFile(candidate: File | undefined) {
     if (!candidate || active) return;
@@ -131,6 +185,57 @@ export function FirmwarePanel({
             ) : null}
           </div>
         ) : null}
+
+        <div className="symbols-upload">
+          <input
+            accept=".elf,application/x-elf"
+            className="visually-hidden"
+            disabled={Boolean(active)}
+            id={symbolsInputId}
+            onChange={(event) => setSymbolsFile(event.target.files?.[0] ?? null)}
+            ref={symbolsInputRef}
+            type="file"
+          />
+          {!symbolsFile ? (
+            <label
+              className="symbols-picker"
+              data-disabled={Boolean(active)}
+              htmlFor={symbolsInputId}
+            >
+              <FileSearch size={15} aria-hidden="true" />
+              <span>Attach matching firmware.elf</span>
+              <small>Optional · max {formatBytes(MAX_ELF_SYMBOL_FILE_BYTES)}</small>
+            </label>
+          ) : (
+            <div className="firmware-file symbol-file" data-valid={Boolean(symbols)}>
+              <FileSearch size={18} aria-hidden="true" />
+              <span>
+                <strong>{symbolsFile.name}</strong>
+                <small>
+                  {symbolsLoading
+                    ? "Reading symbols…"
+                    : symbolsError ?? `${symbols?.symbolCount ?? 0} functions · browser only`}
+                </small>
+              </span>
+              {!active ? (
+                <button
+                  aria-label="Remove debug symbols"
+                  className="icon-button"
+                  onClick={() => {
+                    setSymbolsFile(null);
+                    if (symbolsInputRef.current) symbolsInputRef.current.value = "";
+                  }}
+                  type="button"
+                >
+                  <X size={15} />
+                </button>
+              ) : null}
+            </div>
+          )}
+          <p className="symbols-privacy">
+            Parsed locally for backtraces; the ELF never leaves this browser.
+          </p>
+        </div>
       </section>
 
       {savedApps ? (
@@ -185,8 +290,15 @@ export function FirmwarePanel({
       <div className="rail-action">
         <button
           className="primary-button"
-          disabled={!file || !inspection?.valid || Boolean(active) || starting}
-          onClick={() => file && void onStart(file)}
+          disabled={
+            !file ||
+            !inspection?.valid ||
+            Boolean(active) ||
+            starting ||
+            symbolsLoading ||
+            Boolean(symbolsFile && !symbols)
+          }
+          onClick={() => file && void onStart(file, symbols)}
           type="button"
         >
           <span className="play-glyph" aria-hidden="true" />

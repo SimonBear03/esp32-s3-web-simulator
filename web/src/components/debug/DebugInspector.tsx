@@ -10,10 +10,13 @@ import {
   setBreakpoint,
   stepSession,
 } from "../../lib/api";
+import type { ElfSymbolIndex } from "../../lib/elf";
 import type { DebugStatus, MemoryRead, SimulationSession } from "../../lib/types";
+import { resolvedSymbol, SymbolDecoder } from "./SymbolDecoder";
 
 interface DebugInspectorProps {
   session: SimulationSession | null;
+  symbols: ElfSymbolIndex | null;
 }
 
 function parseAddress(value: string): number | null {
@@ -41,7 +44,7 @@ function formatMemory(memory: MemoryRead | null): string[] {
   return lines;
 }
 
-export function DebugInspector({ session }: DebugInspectorProps) {
+export function DebugInspector({ session, symbols }: DebugInspectorProps) {
   const [status, setStatus] = useState<DebugStatus | null>(null);
   const [registers, setRegisters] = useState<Record<string, number | null>>({});
   const [memoryAddress, setMemoryAddress] = useState("0x42000000");
@@ -52,10 +55,11 @@ export function DebugInspector({ session }: DebugInspectorProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const paused = session?.state === "paused";
+  const workerDebugAllowed = Boolean(session && !session.anonymous);
   const sessionId = session?.id ?? null;
 
   const refresh = useCallback(async () => {
-    if (!sessionId || !paused) return;
+    if (!sessionId || !paused || !workerDebugAllowed) return;
     setBusy(true);
     setError(null);
     try {
@@ -75,7 +79,7 @@ export function DebugInspector({ session }: DebugInspectorProps) {
     } finally {
       setBusy(false);
     }
-  }, [paused, sessionId]);
+  }, [paused, sessionId, workerDebugAllowed]);
 
   useEffect(() => {
     void refresh();
@@ -155,29 +159,31 @@ export function DebugInspector({ session }: DebugInspectorProps) {
     }
   }
 
-  if (!session) {
-    return (
-      <div className="inspector-section empty-inspector">
-        <Bug size={24} />
-        <strong>No active worker</strong>
-        <p>Start a firmware session, then pause it to inspect CPU state.</p>
-      </div>
-    );
-  }
-
-  if (!paused) {
-    return (
-      <div className="inspector-section empty-inspector">
-        <Bug size={24} />
-        <strong>Pause to inspect</strong>
-        <p>Registers, memory, breakpoints, and single-step are available only while paused.</p>
-      </div>
-    );
-  }
-
   const registerEntries = Object.entries(registers);
+  const pcSymbol = resolvedSymbol(symbols, registers.pc);
   return (
     <div className="debug-inspector">
+      <SymbolDecoder programCounter={registers.pc} symbols={symbols} />
+      {!session ? (
+        <div className="inspector-section debug-worker-empty empty-inspector">
+          <Bug size={24} />
+          <strong>No active worker</strong>
+          <p>Start a firmware session, then pause it to inspect CPU state.</p>
+        </div>
+      ) : !workerDebugAllowed ? (
+        <div className="inspector-section debug-worker-empty empty-inspector">
+          <Bug size={24} />
+          <strong>Temporary symbol tools only</strong>
+          <p>Hosted anonymous sessions expose local ELF decoding without worker memory access.</p>
+        </div>
+      ) : !paused ? (
+        <div className="inspector-section debug-worker-empty empty-inspector">
+          <Bug size={24} />
+          <strong>Pause to inspect</strong>
+          <p>Registers, memory, breakpoints, and single-step are available only while paused.</p>
+        </div>
+      ) : (
+        <>
       <div className="debug-heading">
         <div>
           <span className="rail-heading">CPU state</span>
@@ -196,7 +202,10 @@ export function DebugInspector({ session }: DebugInspectorProps) {
 
       <div className="pc-value">
         <span>PC</span>
-        <code>{formatRegister(registers.pc ?? null)}</code>
+        <div>
+          <code>{formatRegister(registers.pc ?? null)}</code>
+          {pcSymbol ? <small>{pcSymbol}</small> : null}
+        </div>
         <button
           className="secondary-button"
           disabled={busy}
@@ -292,6 +301,8 @@ export function DebugInspector({ session }: DebugInspectorProps) {
           ))}
         </ul>
       </section>
+        </>
+      )}
       {error ? <div className="inline-error">{error}</div> : null}
     </div>
   );

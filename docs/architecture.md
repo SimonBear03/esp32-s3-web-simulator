@@ -2,9 +2,10 @@
 
 ## Product Contract
 
-The simulator accepts the same merged ESP32-S3 firmware image or ELF intended
-for physical hardware and executes it without replacing the firmware's runtime
-or application APIs.
+The simulator executes the same merged ESP32-S3 flash image intended for
+physical hardware without replacing the firmware's runtime or application
+APIs. A matching ELF may be selected separately for browser-only symbols; it is
+not treated as a bootable flash image or uploaded to the service.
 
 The web interface should provide a virtual device shell, framebuffer, controls,
 serial console, debugger, power controls, and deterministic event recording.
@@ -107,6 +108,8 @@ The product currently exposes:
 - breakpoints plus CPU register and memory inspection;
 - single-step and synchronized debugger stop state through private GDB
   integration;
+- browser-only Xtensa ELF function symbols for pasted panic/backtrace addresses
+  and the paused program counter; the ELF is never uploaded or saved;
 - bounded typed event recording and privacy-preserving diagnostics;
 - native SPI, I2C, GPIO, display, input, IMU, power, and ADC traces;
 - deterministic external-input replay from the uploaded flash/NVS baseline.
@@ -118,7 +121,8 @@ register writes and never exposes raw GDB or QMP.
 
 Later debugging work should add:
 
-- panic/backtrace decoding and source symbols from an explicitly uploaded ELF;
+- DWARF source file/line decoding and C++ demangling beyond the current bounded
+  function-symbol resolver;
 - instruction/timing traces and back-in-time CPU-state replay.
 
 ## Power Fidelity
