@@ -24,7 +24,8 @@ runtime inspector, and the serial dock.
   controls.
 - `FirmwarePanel` performs accurate local merged-image checks and starts the
   real API session. Its optional matching ELF control indexes bounded Xtensa
-  function symbols locally and never adds the ELF to a network request.
+  function symbols locally, verifies the ESP-IDF application build hash when
+  available, and never adds the ELF to a network request.
 - `DeviceStage` owns the original compatible-device shells and a canvas-backed
   RGB framebuffer. The Cardputer keyboard and StickS3 buttons remain native
   buttons.

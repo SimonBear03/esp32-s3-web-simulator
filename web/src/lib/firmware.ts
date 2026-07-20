@@ -5,6 +5,13 @@ import type { BoardProfile } from "./types";
 const ESP_IMAGE_MAGIC = 0xe9;
 const MINIMUM_IMAGE_SIZE = 4096;
 const MAXIMUM_SEGMENTS = 16;
+const ESP_APP_DESC_MAGIC = 0xabcd5432;
+const ESP_APP_DESC_OFFSET = 0x20;
+const ESP_APP_ELF_SHA256_OFFSET = 144;
+const SHA256_BYTES = 32;
+const MAX_FIRMWARE_BUILD_MATCH_BYTES = 8 * 1024 * 1024;
+
+export type ElfFirmwareMatch = "matched" | "mismatched" | "unavailable";
 
 export interface FirmwareCheck {
   label: string;
@@ -25,6 +32,52 @@ export function formatBytes(bytes: number): string {
   if (kib < 1024) return `${kib.toFixed(kib >= 100 ? 0 : 1)} KiB`;
   const mib = kib / 1024;
   return `${mib.toFixed(mib >= 10 ? 1 : 2)} MiB`;
+}
+
+function hex(bytes: Uint8Array): string {
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+export async function embeddedElfHashes(file: File): Promise<Set<string>> {
+  if (file.size > MAX_FIRMWARE_BUILD_MATCH_BYTES) {
+    throw new Error("Firmware is too large for browser build matching");
+  }
+  const payload = new Uint8Array(await file.arrayBuffer());
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const hashes = new Set<string>();
+  const descriptorBytes = ESP_APP_ELF_SHA256_OFFSET + SHA256_BYTES;
+  for (
+    let appOffset = 0;
+    appOffset + ESP_APP_DESC_OFFSET + descriptorBytes <= payload.length;
+    appOffset += 4
+  ) {
+    if (
+      payload[appOffset] !== ESP_IMAGE_MAGIC ||
+      payload[appOffset + 1] < 1 ||
+      payload[appOffset + 1] > MAXIMUM_SEGMENTS ||
+      payload[appOffset + 2] > 3
+    ) {
+      continue;
+    }
+    const descriptorOffset = appOffset + ESP_APP_DESC_OFFSET;
+    if (view.getUint32(descriptorOffset, true) !== ESP_APP_DESC_MAGIC) continue;
+    const digest = payload.subarray(
+      descriptorOffset + ESP_APP_ELF_SHA256_OFFSET,
+      descriptorOffset + ESP_APP_ELF_SHA256_OFFSET + SHA256_BYTES,
+    );
+    if (digest.every((value) => value === 0 || value === 0xff)) continue;
+    hashes.add(hex(digest));
+  }
+  return hashes;
+}
+
+export async function verifyElfFirmwareMatch(
+  firmware: File,
+  elfSha256: string,
+): Promise<ElfFirmwareMatch> {
+  const hashes = await embeddedElfHashes(firmware);
+  if (hashes.size === 0) return "unavailable";
+  return hashes.has(elfSha256) ? "matched" : "mismatched";
 }
 
 export async function inspectFirmware(

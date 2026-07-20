@@ -368,9 +368,12 @@ The browser workbench loaded the matching unmodified Cardputer Chess
 `firmware.elf` from current `main` revision
 `20da6c957c15c0e1ec79220f1d32a2885ac9a3b8`. The 21774544-byte file was
 recognized as a 32-bit little-endian Xtensa ELF and produced a bounded index of
-2813 executable function symbols. The real address `0x4200fee5` resolved to
-`rtc_gpio_is_valid_gpio+0x1`; an adjacent stack address remained explicitly
-unresolved rather than being assigned a misleading nearest symbol.
+2813 executable function symbols. Its SHA-256 matched the `app_elf_sha256`
+embedded in the merged image's ESP-IDF application descriptor. A copy with one
+byte modified remained structurally parseable but was correctly rejected as a
+different build and disabled session start. The real address `0x4200fee5`
+resolved to `rtc_gpio_is_valid_gpio+0x1`; an adjacent stack address remained
+explicitly unresolved rather than being assigned a misleading nearest symbol.
 
 The same real ELF and merged image passed rendered Chromium checks at 1440 by
 960 and 390 by 844. Desktop and mobile both exposed the decoder without

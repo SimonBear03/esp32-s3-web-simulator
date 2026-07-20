@@ -46,7 +46,9 @@ remains private to each worker and is never proxied to a browser. The firmware
 rail also accepts an optional matching Xtensa ELF for function symbolication.
 The browser validates and indexes that ELF locally, keeps it out of every HTTP
 request and saved-app slot, and can decode pasted panic/backtrace addresses
-plus the paused program counter. Production workers can run inside the tested
+plus the paused program counter. For ESP-IDF images it compares the ELF SHA-256
+against the application descriptor and blocks a mismatched symbol build.
+Production workers can run inside the tested
 Bubblewrap boundary. The selected hostile
 internet boundary is now implemented as a peer-credential-gated broker in
 front of a dedicated rootless OCI daemon: the API never receives Docker

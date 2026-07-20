@@ -49,6 +49,7 @@ export interface ElfSymbol {
 export interface ElfSymbolIndex {
   fileName: string;
   fileSize: number;
+  sha256: string;
   symbolCount: number;
   symbols: readonly ElfSymbol[];
 }
@@ -260,9 +261,13 @@ export async function inspectElfSymbols(file: File): Promise<ElfSymbolIndex> {
   if (symbols.length === 0) {
     throw new ElfSymbolError("ELF contains no usable executable symbols");
   }
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
   return {
     fileName: file.name,
     fileSize: file.size,
+    sha256: [...digest]
+      .map((value) => value.toString(16).padStart(2, "0"))
+      .join(""),
     symbolCount: symbols.length,
     symbols,
   };

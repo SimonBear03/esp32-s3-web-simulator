@@ -53,8 +53,10 @@ independent reconciliation loop. The hosted anonymous surface omits debugger,
 diagnostics, and replay routes; signed-in accounts retain the full bounded
 worker tooling. A browser-only ELF decoder may still appear for an anonymous
 session because it sends neither the ELF nor decoded addresses to the gateway
-or core. Anonymous access stays disabled unless the verifier, OCI broker, core,
-and static workbench all pass readiness.
+or core. Browser parsing rejects ELF files above 32 MiB, symbol tables above
+100000 entries, malformed bounds, and firmware build-match inputs above the
+board's 8 MiB capacity. Anonymous access stays disabled unless the verifier,
+OCI broker, core, and static workbench all pass readiness.
 
 Optional saved-app storage belongs to the private gateway, not this public core.
 The public client renders it only for a gateway-confirmed account, keeps save

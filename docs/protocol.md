@@ -164,8 +164,13 @@ next to the required merged flash image. This is deliberately not an API
 upload: the browser enforces a 32 MiB limit, parses a bounded executable symbol
 table, and retains only its in-memory index for the active page/session. Pasted
 panic/backtrace addresses and the paused program counter can then be resolved
-to function-plus-offset locally. The ELF does not enter multipart session
-creation, saved-app storage, diagnostics, replay, gateway logs, or backups.
+to function-plus-offset locally. For ESP-IDF firmware, the browser finds the
+application descriptor embedded after each candidate app image and compares
+its `app_elf_sha256` with Web Crypto's SHA-256 of the selected ELF. A known
+mismatch disables session start; legacy images without the descriptor remain
+usable with an explicit “match unavailable” state. The ELF does not enter
+multipart session creation, saved-app storage, diagnostics, replay, gateway
+logs, or backups.
 
 If the guest reaches a breakpoint after resume, its state changes back to
 `paused` and `debug/status` reports the stop reply. Clients should poll session

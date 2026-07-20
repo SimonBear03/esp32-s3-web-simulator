@@ -7,6 +7,8 @@ import type { SavedAppsController } from "../hooks/useSavedApps";
 import {
   formatBytes,
   inspectFirmware,
+  verifyElfFirmwareMatch,
+  type ElfFirmwareMatch,
   type FirmwareInspection,
 } from "../lib/firmware";
 import {
@@ -24,6 +26,23 @@ interface FirmwarePanelProps {
   onStart: (file: File, symbols: ElfSymbolIndex | null) => Promise<void>;
   savedApps: SavedAppsController | null;
   onRunSaved: (app: SavedApp) => Promise<void>;
+}
+
+function symbolsStatusText(
+  firmware: File | null,
+  symbols: ElfSymbolIndex | null,
+  loading: boolean,
+  error: string | null,
+  match: ElfFirmwareMatch | null,
+): string {
+  if (loading) return "Reading symbols…";
+  if (error) return error;
+  if (!firmware) return "Select firmware to verify this ELF";
+  if (match === null) return "Matching firmware build…";
+  if (match === "mismatched") return "ELF does not match this firmware build";
+  return `${symbols?.symbolCount ?? 0} functions · ${
+    match === "matched" ? "build matched" : "legacy match unavailable"
+  }`;
 }
 
 export function FirmwarePanel({
@@ -44,6 +63,11 @@ export function FirmwarePanel({
   const [symbols, setSymbols] = useState<ElfSymbolIndex | null>(null);
   const [symbolsError, setSymbolsError] = useState<string | null>(null);
   const [symbolsLoading, setSymbolsLoading] = useState(false);
+  const [symbolsMatch, setSymbolsMatch] = useState<{
+    firmware: File;
+    elfSha256: string;
+    status: ElfFirmwareMatch;
+  } | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const active = Boolean(
     session && ["starting", "running", "paused"].includes(session.state),
@@ -55,6 +79,7 @@ export function FirmwarePanel({
       setSymbolsFile(null);
       setSymbols(null);
       setSymbolsError(null);
+      setSymbolsMatch(null);
       if (symbolsInputRef.current) symbolsInputRef.current.value = "";
     }
     wasActive.current = active;
@@ -104,10 +129,42 @@ export function FirmwarePanel({
     };
   }, [symbolsFile]);
 
+  useEffect(() => {
+    if (!file || !symbols) {
+      setSymbolsMatch(null);
+      return;
+    }
+    let current = true;
+    setSymbolsMatch(null);
+    void verifyElfFirmwareMatch(file, symbols.sha256)
+      .then((status) => {
+        if (current) {
+          setSymbolsMatch({ firmware: file, elfSha256: symbols.sha256, status });
+        }
+      })
+      .catch(() => {
+        if (current) setSymbolsError("Firmware build hash could not be verified");
+      });
+    return () => {
+      current = false;
+    };
+  }, [file, symbols]);
+
   function acceptFile(candidate: File | undefined) {
     if (!candidate || active) return;
     setFile(candidate);
   }
+
+  const currentSymbolsMatch =
+    file &&
+    symbols &&
+    symbolsMatch?.firmware === file &&
+    symbolsMatch.elfSha256 === symbols.sha256
+      ? symbolsMatch.status
+      : null;
+  const symbolsReady = Boolean(
+    symbols && currentSymbolsMatch && currentSymbolsMatch !== "mismatched",
+  );
 
   return (
     <aside className="firmware-panel" aria-label="Firmware setup">
@@ -207,14 +264,18 @@ export function FirmwarePanel({
               <small>Optional · max {formatBytes(MAX_ELF_SYMBOL_FILE_BYTES)}</small>
             </label>
           ) : (
-            <div className="firmware-file symbol-file" data-valid={Boolean(symbols)}>
+            <div className="firmware-file symbol-file" data-valid={symbolsReady}>
               <FileSearch size={18} aria-hidden="true" />
               <span>
                 <strong>{symbolsFile.name}</strong>
                 <small>
-                  {symbolsLoading
-                    ? "Reading symbols…"
-                    : symbolsError ?? `${symbols?.symbolCount ?? 0} functions · browser only`}
+                  {symbolsStatusText(
+                    file,
+                    symbols,
+                    symbolsLoading,
+                    symbolsError,
+                    currentSymbolsMatch,
+                  )}
                 </small>
               </span>
               {!active ? (
@@ -296,9 +357,9 @@ export function FirmwarePanel({
             Boolean(active) ||
             starting ||
             symbolsLoading ||
-            Boolean(symbolsFile && !symbols)
+            Boolean(symbolsFile && !symbolsReady)
           }
-          onClick={() => file && void onStart(file, symbols)}
+          onClick={() => file && void onStart(file, symbolsReady ? symbols : null)}
           type="button"
         >
           <span className="play-glyph" aria-hidden="true" />
