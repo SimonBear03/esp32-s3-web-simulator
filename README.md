@@ -18,12 +18,16 @@ physical device.
 
 Active implementation. The server-side worker boots real merged ESP32-S3 flash
 images, preserves private flash/NVS state for a session, streams bidirectional
-UART, and supports reset and bounded worker lifecycles. The Cardputer ADV model
+UART, and supports reset, cold power-off/power-on, and bounded worker
+lifecycles. Power off terminates QEMU and closes live streams while retaining
+the session's private flash/NVS; power on cold-boots that same image and
+restores its configured virtual IMU and power environment. The Cardputer ADV model
 now includes the ESP32-S3 I2C path and a TCA8418 keyboard FIFO with typed web
 input translated through QMP. Cardputer ADV and StickS3 now have SPI3/ST7789
 display models with correctly sized RGB framebuffers and live binary WebSocket
 streaming. Both profiles are covered by real compiled firmware, exact pixel
-assertions, NVS reset persistence, and pause/resume/reset controls; StickS3 also
+assertions, NVS reset and cold-boot persistence, and pause/resume/reset/power
+controls; StickS3 also
 passes its real QIO-flash plus 8 MiB octal-PSRAM configuration. Power, sensor,
 and button input are live on StickS3 through behavioral BMI270 and M5PM1
 models. Cardputer ADV now accepts deterministic BMI270 motion and battery
@@ -75,9 +79,9 @@ Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
 firmware has passed boot, virtual ST7789 rendering, TCA8418 input, persistent
 application NVS, embedded move search, checkmate, and return-to-setup proofs.
-The current tested `main` revision and its exact evidence are recorded in
-`docs/conformance.md`; historical application failures remain separated from
-simulator release failures there.
+The most recent simulator-proven revision and the newer checkout's separate
+compatibility status are recorded in `docs/conformance.md`; application and
+simulator failures remain explicitly separated there.
 
 ## Product Boundary
 

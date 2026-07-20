@@ -1,19 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { BatteryCharging } from "lucide-react";
+import { BatteryCharging, Power, PowerOff } from "lucide-react";
 import { useState } from "react";
 
-import type { BoardId, PowerSample } from "../../lib/types";
+import type { BoardId, PowerSample, SessionState } from "../../lib/types";
 
 interface PowerInspectorProps {
   boardId: BoardId;
   enabled: boolean;
+  sessionState: SessionState | "idle";
+  busy: boolean;
+  onPowerOff: () => void;
+  onPowerOn: () => void;
   onPower: (sample: PowerSample) => void;
 }
 
 export function PowerInspector({
   boardId,
   enabled,
+  sessionState,
+  busy,
+  onPowerOff,
+  onPowerOn,
   onPower,
 }: PowerInspectorProps) {
   const [sample, setSample] = useState<PowerSample>({
@@ -21,9 +29,42 @@ export function PowerInspector({
     vin_mv: 5000,
     charging: true,
   });
+  const canPowerOff = sessionState === "running" || sessionState === "paused";
+  const canPowerOn = sessionState === "powered_off";
 
   return (
     <div className="inspector-section">
+      <section className="power-cycle-card" aria-label="Virtual power rail">
+        <div className="inspector-title">
+          <Power size={17} />
+          <span>Virtual power rail</span>
+        </div>
+        <div className="power-cycle-actions">
+          <button
+            className="secondary-button"
+            disabled={!canPowerOff || busy}
+            onClick={onPowerOff}
+            type="button"
+          >
+            <PowerOff size={15} />
+            Power off
+          </button>
+          <button
+            className="secondary-button"
+            disabled={!canPowerOn || busy}
+            onClick={onPowerOn}
+            type="button"
+          >
+            <Power size={15} />
+            Power on
+          </button>
+        </div>
+        <p className="field-help">
+          Power off stops the worker. Power on performs a cold boot from the same
+          private flash/NVS image while RAM, display, UART, and debugger state reset.
+          Virtual battery and motion inputs remain part of the test environment.
+        </p>
+      </section>
       <div className="inspector-title">
         <BatteryCharging size={17} />
         <span>

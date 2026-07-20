@@ -75,6 +75,9 @@ remain excluded from that store and its backups.
 - concurrency and TTL are bounded;
 - flash/NVS, sockets, screenshots, and uploads live only in the private session
   directory and are removed when the session stops;
+- powering off removes the worker, sockets, screenshots, streams, and
+  RAM-adjacent service state but deliberately retains the private flash/NVS
+  image until power on, explicit stop, expiry, or failure;
 - firmware bytes are excluded from public metadata and diagnostics.
 
 ## Production isolation gate
@@ -130,7 +133,10 @@ automatic availability fallback for anonymous sessions.
 
 The default contract is ephemeral: uploaded firmware, its in-memory replay
 baseline, recorded UART payloads, and mutated flash/NVS are destroyed with the
-session. An optional symbol ELF has a stricter boundary: it is parsed in the
+session. `powered_off` is an active retained state rather than destruction: it
+continues to consume a session slot and TTL, and anonymous hosting continues to
+require heartbeats and inactivity cleanup. An optional symbol ELF has a
+stricter boundary: it is parsed in the
 browser, is never uploaded, and its in-memory index is dropped when the session
 ends or the page closes. Diagnostics are explicit, access-controlled by the
 hosting gateway, size-bounded, and exclude firmware, mutated flash, framebuffer pixels, debug

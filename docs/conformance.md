@@ -106,6 +106,29 @@ The model uses an independently implemented behavioral transfer approximation
 and nominal calibration eFuse state; no ESP-IDF or M5Stack source is copied into
 the GPL patch.
 
+## 2026-07-20 cold power-cycle release gate
+
+Both owned board fixtures passed an additional cold power-cycle gate through
+their normal Bubblewrap workers. After deterministic motion and power inputs,
+the service terminated QEMU, observed `powered_off` with no process, retained
+the session-private flash/NVS image, and rejected live framebuffer access. It
+then launched a fresh worker from that same image. Cardputer ADV and StickS3
+both advanced NVS boot count to 3 and read back the injected IMU and power
+environment, producing:
+
+```text
+SIM:POWER_CYCLE profile=cardputer-adv boot_count=3 environment=restored
+SIM:POWER_CYCLE profile=sticks3 boot_count=3 environment=restored
+```
+
+The same recordings then replayed from their original normalized flash
+baseline into generation 2. Cardputer ADV replayed 17 actions and StickS3
+replayed 11, including power off and power on; each reached the same virtual
+environment and advanced NVS boot count to 4. This proves that reset remains a
+warm lifecycle control, power off/on is a true worker replacement with retained
+flash, and replay reconstructs both the external environment and cold-boot
+boundary. Explicit stop and expiry still remove the entire private session.
+
 Application repositories such as Cardputer Chess are valuable compatibility
 and stress cases, but they are not release gates while they are in progress.
 Their own failures must not be mislabeled as simulator failures.
@@ -361,6 +384,29 @@ closed while terminating an unready worker. Native trace output now uses the
 QEMU log backend's inherited stderr instead of reopening `/dev/stderr`, which
 fails when Uvicorn/uvloop supplies a socketpair. The high-volume trace reader
 also yields cooperatively so QMP control work cannot be starved.
+
+## 2026-07-20 newest Cardputer Chess checkout observation
+
+Cardputer Chess was then updated cleanly to revision
+`2bfd97fca0bca93dd2bfb1c686a00018d518dcfb` (`feat: add game home and
+ten-level setup`). All 303 normal host assertions and all 303 application
+sanitizer assertions passed. The `cardputer-adv` firmware build also passed,
+using 178180 of 327680 bytes of RAM (54.4%) and 558009 of 3342336 bytes of
+flash (16.7%). Its private 623904-byte merged image had SHA-256
+`63c63ee75705a6805b07bd2fcc9187697ef1505cd1df684e013338c9c6c6b8e9`;
+the 21807136-byte ELF had SHA-256
+`c08e70eb658f71b66beb6abb7813f1ca78b01a92b3864be982fab12b34c15d24`.
+Neither artifact is committed or redistributed.
+
+The new Home framebuffer boots in the simulator and Enter opens New Match.
+The first Down navigation into the expanded level UI then makes the current
+QEMU worker exit with code 139, without a guest panic or reset loop. This is an
+open simulator compatibility regression triggered by the newer display path;
+it is not presented as a Chess application failure, and the older complete
+Chess proofs remain valid only for their recorded revisions. Owned Cardputer
+ADV and StickS3 conformance firmware, including the cold power-cycle gate
+above, remains the release authority while this application-level regression
+is investigated separately.
 
 ## 2026-07-20 browser-only Cardputer ELF symbol proof
 

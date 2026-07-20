@@ -17,6 +17,7 @@ import type {
   BoardId,
   InputEvent,
   SimulationSession,
+  SessionState,
 } from "../lib/types";
 
 type InputEventWithoutSequence = InputEvent extends infer Event
@@ -27,7 +28,15 @@ type InputEventWithoutSequence = InputEvent extends infer Event
 
 export interface SimulatorSessionController {
   session: SimulationSession | null;
-  busyAction: "start" | "pause" | "resume" | "reset" | "stop" | null;
+  busyAction:
+    | "start"
+    | "pause"
+    | "resume"
+    | "reset"
+    | "power-off"
+    | "power-on"
+    | "stop"
+    | null;
   error: string | null;
   inputConnected: boolean;
   start: (boardId: BoardId, firmware: File) => Promise<boolean>;
@@ -35,12 +44,24 @@ export interface SimulatorSessionController {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   reset: () => Promise<void>;
+  powerOff: () => Promise<void>;
+  powerOn: () => Promise<void>;
   stop: () => Promise<void>;
   sendBoardInput: (event: InputEventWithoutSequence) => boolean;
   clearError: () => void;
 }
 
-const ACTIVE_STATES = new Set(["starting", "running", "paused"]);
+const ACTIVE_STATES = new Set<SessionState>([
+  "starting",
+  "running",
+  "paused",
+  "powered_off",
+]);
+const INPUT_SOCKET_STATES = new Set<SessionState>([
+  "starting",
+  "running",
+  "paused",
+]);
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : "The simulator request failed";
@@ -57,7 +78,7 @@ export function useSimulatorSession(): SimulatorSessionController {
   const sequenceRef = useRef(0);
 
   useEffect(() => {
-    if (!session || !ACTIVE_STATES.has(session.state)) {
+    if (!session || !INPUT_SOCKET_STATES.has(session.state)) {
       inputSocketRef.current?.close();
       inputSocketRef.current = null;
       setInputConnected(false);
@@ -188,6 +209,15 @@ export function useSimulatorSession(): SimulatorSessionController {
     () => runAction("reset", (sessionId) => controlSession(sessionId, "reset")),
     [runAction],
   );
+  const powerOff = useCallback(
+    () =>
+      runAction("power-off", (sessionId) => controlSession(sessionId, "power-off")),
+    [runAction],
+  );
+  const powerOn = useCallback(
+    () => runAction("power-on", (sessionId) => controlSession(sessionId, "power-on")),
+    [runAction],
+  );
   const stop = useCallback(
     () => runAction("stop", deleteSession),
     [runAction],
@@ -214,6 +244,8 @@ export function useSimulatorSession(): SimulatorSessionController {
     pause,
     resume,
     reset,
+    powerOff,
+    powerOn,
     stop,
     sendBoardInput,
     clearError: useCallback(() => setError(null), []),

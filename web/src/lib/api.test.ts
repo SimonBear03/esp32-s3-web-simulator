@@ -2,10 +2,32 @@
 
 import { afterEach, vi } from "vitest";
 
-import { createSession } from "./api";
+import { controlSession, createSession } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("session power controls", () => {
+  it("sends an explicit cold-power action through the bounded control route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ state: "powered_off" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await controlSession("a".repeat(32), "power-off");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/v1/sessions/${"a".repeat(32)}/control`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "power-off" }),
+      }),
+    );
+  });
 });
 
 describe("session upload privacy", () => {

@@ -20,7 +20,19 @@ import { useSavedApps } from "./hooks/useSavedApps";
 import { useSimulatorSession } from "./hooks/useSimulatorSession";
 import { shortBoardLabel } from "./lib/boards";
 import type { ElfSymbolIndex } from "./lib/elf";
-import type { BoardId } from "./lib/types";
+import type { BoardId, SessionState } from "./lib/types";
+
+const ACTIVE_SESSION_STATES = new Set<SessionState>([
+  "starting",
+  "running",
+  "paused",
+  "powered_off",
+]);
+const STREAM_SESSION_STATES = new Set<SessionState>([
+  "starting",
+  "running",
+  "paused",
+]);
 
 export function App() {
   const boards = useBoardProfiles();
@@ -39,6 +51,8 @@ export function App() {
     pause,
     resume,
     reset,
+    powerOff,
+    powerOn,
     stop,
     sendBoardInput,
     clearError,
@@ -48,18 +62,17 @@ export function App() {
     hostedAccess.config.saved_apps_enabled === true;
   const savedApps = useSavedApps(savedAppsEnabled);
   const board = boards[boardId];
-  const active = Boolean(
-    session && ["starting", "running", "paused"].includes(session.state),
-  );
-  const sessionId = active && session ? session.id : null;
-  const streamGeneration = active && session ? session.generation : 0;
+  const active = Boolean(session && ACTIVE_SESSION_STATES.has(session.state));
+  const streaming = Boolean(session && STREAM_SESSION_STATES.has(session.state));
+  const sessionId = streaming && session ? session.id : null;
+  const streamGeneration = streaming && session ? session.generation : 0;
   const inputEnabled = session?.state === "running" && inputConnected;
 
   useEffect(() => {
     if (
       debugSymbols &&
       session &&
-      !["starting", "running", "paused"].includes(session.state)
+      !ACTIVE_SESSION_STATES.has(session.state)
     ) {
       setDebugSymbols(null);
     }
@@ -174,6 +187,9 @@ export function App() {
             boardId={boardId}
             debugSymbols={debugSymbols}
             inputConnected={inputConnected}
+            onPowerOff={() => void powerOff()}
+            onPowerOn={() => void powerOn()}
+            powerBusy={busyAction === "power-off" || busyAction === "power-on"}
             sendBoardInput={sendBoardInput}
             session={session}
           />

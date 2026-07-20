@@ -32,6 +32,7 @@ const STATE_LABELS: Record<AppHeaderProps["sessionState"], string> = {
   starting: "Starting",
   running: "Running",
   paused: "Paused",
+  powered_off: "Powered off",
   stopped: "Stopped",
   failed: "Failed",
   expired: "Expired",
@@ -51,9 +52,12 @@ export function AppHeader({
   onSignOut,
   signingOut,
 }: AppHeaderProps) {
-  const active = ["starting", "running", "paused"].includes(sessionState);
+  const active = ["starting", "running", "paused", "powered_off"].includes(
+    sessionState,
+  );
   const running = sessionState === "running";
   const paused = sessionState === "paused";
+  const resettable = running || paused;
 
   return (
     <header className="app-header">
@@ -107,7 +111,7 @@ export function AppHeader({
         </button>
         <button
           className="tool-button"
-          disabled={!active || busy}
+          disabled={!resettable || busy}
           onClick={onReset}
           type="button"
         >

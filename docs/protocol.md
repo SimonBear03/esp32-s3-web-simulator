@@ -62,10 +62,18 @@ session directory is writable.
 - `GET /v1/sessions/{id}` returns current state.
 - `DELETE /v1/sessions/{id}` stops the worker and destroys its runtime files.
 - `POST /v1/sessions/{id}/control` accepts one of
-  `{"action":"pause"}`, `{"action":"resume"}`, or `{"action":"reset"}`.
+  `{"action":"pause"}`, `{"action":"resume"}`, `{"action":"reset"}`,
+  `{"action":"power-off"}`, or `{"action":"power-on"}`.
   Pause and resume map to QEMU execution control; reset preserves the private
-  flash/NVS image.
+  flash/NVS image. Power off terminates QEMU and moves the session to
+  `powered_off` while retaining private flash/NVS and capacity; power on cold
+  boots that same image and restores accepted virtual IMU and power state.
 - Sessions expire automatically at the configured TTL.
+
+The framebuffer, UART, input, and debugger surfaces accept only live
+`running`/`paused` states as appropriate and are unavailable while
+`powered_off`. Normal session polling remains available so a client can power
+the retained session back on or stop it.
 
 ## Serial stream
 
@@ -189,7 +197,7 @@ by `SIMULATOR_MAX_EVENT_PAGE_SIZE` (500 by default). The response reports when
 older events or the requested cursor were truncated. Events contain generation,
 monotonic offset, category, type, source, and bounded structured metadata.
 
-The service records accepted external inputs, reset/pause/resume controls,
+The service records accepted external inputs, reset/pause/resume/power controls,
 replay lifecycle, worker lifecycle, and native allowlisted peripheral events.
 The current QEMU worker emits SPI transaction summaries, I2C bus activity,
 GPIO transitions, ST7789 commands/windows, keyboard or button transitions, IMU
@@ -218,8 +226,8 @@ normal session polling expose status. A replay:
 1. stops the private worker;
 2. overwrites its flash with the in-memory, original normalized upload;
 3. starts a new worker generation;
-4. reapplies accepted key, button, IMU, power, UART-input, and reset actions at
-   their recorded monotonic offsets.
+4. reapplies accepted key, button, IMU, power-state, UART-input, reset,
+   power-off, and power-on actions at their recorded monotonic offsets.
 
 Pause/resume and debug operations are observations or execution controls, not
 external board stimuli, so they are present in the timeline but excluded from

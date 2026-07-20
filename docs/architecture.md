@@ -30,8 +30,8 @@ Simulation session service
 Peer-credential-gated worker broker
   fixed policy only; owns dedicated rootless Docker endpoint
              |
-One emulator worker per active session
-  digest-pinned OCI + QEMU; ESP32-S3 and board device models
+One reserved capacity slot per active session
+  at most one digest-pinned OCI + QEMU worker; ESP32-S3 and board device models
 ```
 
 The browser protocol should remain engine-neutral so a future open-source
@@ -90,12 +90,13 @@ accept keyboard controls, preserve preferences across restarts, and support
 playing a complete game. Because that application is in progress, it does not
 replace the simulator-owned conformance firmware as the release gate.
 
-Unmodified application revisions have completed that milestone. The current
-tested `main` revision `20da6c9` renders its setup and game screens, accepts
-real TCA8418 input, and preserves its selected level across simulated reset.
-Earlier revisions also played through checkmate and returned to setup. Exact
-current and historical evidence remains in `docs/conformance.md`; owned
-firmware continues to gate releases.
+Unmodified application revisions have completed that milestone. Revision
+`20da6c9` renders its setup and game screens, accepts real TCA8418 input, and
+preserves its selected level across simulated reset. Earlier revisions also
+played through checkmate and returned to setup. Newer application revisions
+remain compatibility inputs rather than implicit release claims. Exact current
+and historical evidence remains in `docs/conformance.md`; owned firmware
+continues to gate releases.
 
 The existing StickS3 companion is the second acceptance application for display,
 buttons, NVS, overlays, and graceful behavior when BLE is unavailable.
@@ -104,7 +105,7 @@ buttons, NVS, overlays, and graceful behavior when BLE is unavailable.
 
 The product currently exposes:
 
-- bidirectional UART and pause, resume, and reset;
+- bidirectional UART and pause, resume, reset, cold power-off, and power-on;
 - breakpoints plus CPU register and memory inspection;
 - single-step and synchronized debugger stop state through private GDB
   integration;
@@ -128,13 +129,18 @@ Later debugging work should add:
 
 ## Power Fidelity
 
-The initial model is behavioral, not an electrical circuit simulator. Cardputer
-ADV exposes battery voltage through its GPIO10 ADC1 divider; its hardware API
-does not provide charging status or charge current. StickS3 exposes logical
-battery, VIN, and charging values through M5PM1. Later work should represent
-sleep/deep sleep, wake sources, reset, and injected brownouts. Accurate current
-consumption, ADC noise, per-device calibration, and thermal estimates require
-physical-device measurements.
+The initial model is behavioral, not an electrical circuit simulator. Power
+off terminates the worker and closes framebuffer, UART, input, and debug
+streams while the active session retains its private flash/NVS. Power on starts
+a fresh QEMU process from that same image, clears RAM-adjacent output/debug
+state, and restores the configured virtual IMU and power environment. This is
+a cold boot, distinct from reset, and it remains subject to the original
+session TTL and capacity limit. Cardputer ADV exposes battery voltage through
+its GPIO10 ADC1 divider; its hardware API does not provide charging status or
+charge current. StickS3 exposes logical battery, VIN, and charging values
+through M5PM1. Later work should represent sleep/deep sleep, wake sources, and
+injected brownouts. Accurate current consumption, ADC noise, per-device
+calibration, and thermal estimates require physical-device measurements.
 
 ## Licensing Boundary
 

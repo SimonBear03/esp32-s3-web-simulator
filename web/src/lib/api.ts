@@ -204,7 +204,7 @@ export function deleteSession(sessionId: string): Promise<SimulationSession> {
 
 export function controlSession(
   sessionId: string,
-  action: "pause" | "resume" | "reset",
+  action: "pause" | "resume" | "reset" | "power-off" | "power-on",
 ): Promise<SimulationSession> {
   return request(`/v1/sessions/${sessionId}/control`, {
     method: "POST",

@@ -93,7 +93,7 @@ INPUT_MESSAGE_ADAPTER = TypeAdapter(InputMessage)
 class SessionControlMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["pause", "resume", "reset"]
+    action: Literal["pause", "resume", "reset", "power-off", "power-on"]
 
 
 class SessionReplayMessage(BaseModel):
@@ -196,14 +196,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session = await manager.pause(session_id)
             elif control.action == "resume":
                 session = await manager.resume(session_id)
-            else:
+            elif control.action == "reset":
                 session = await manager.reset(session_id)
+            elif control.action == "power-off":
+                session = await manager.power_off(session_id)
+            else:
+                session = await manager.power_on(session_id)
             return session.public_dict()
         except SessionNotFoundError as error:
             raise HTTPException(status_code=404, detail="simulation session not found") from error
         except SessionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        except (GdbRemoteError, QmpError) as error:
+        except (GdbRemoteError, QmpError, WorkerUnavailableError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.get("/v1/sessions/{session_id}/events")

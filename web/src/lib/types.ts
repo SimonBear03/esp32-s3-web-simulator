@@ -5,6 +5,7 @@ export type SessionState =
   | "starting"
   | "running"
   | "paused"
+  | "powered_off"
   | "stopped"
   | "failed"
   | "expired";

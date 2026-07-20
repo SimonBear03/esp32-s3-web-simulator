@@ -28,6 +28,9 @@ interface InspectorProps {
   debugSymbols: ElfSymbolIndex | null;
   session: SimulationSession | null;
   inputConnected: boolean;
+  powerBusy: boolean;
+  onPowerOff: () => void;
+  onPowerOn: () => void;
   sendBoardInput: (event: InputEventWithoutSequence) => boolean;
 }
 
@@ -43,6 +46,9 @@ export function Inspector({
   debugSymbols,
   session,
   inputConnected,
+  powerBusy,
+  onPowerOff,
+  onPowerOn,
   sendBoardInput,
 }: InspectorProps) {
   const [tab, setTab] = useState<InspectorTab>("inputs");
@@ -106,8 +112,12 @@ export function Inspector({
         {tab === "power" ? (
           <PowerInspector
             boardId={boardId}
+            busy={powerBusy}
             enabled={inputEnabled}
+            onPowerOff={onPowerOff}
+            onPowerOn={onPowerOn}
             onPower={sendPower}
+            sessionState={session?.state ?? "idle"}
           />
         ) : null}
         {tab === "timeline" ? <TimelineInspector session={session} /> : null}

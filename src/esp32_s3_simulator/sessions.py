@@ -58,13 +58,19 @@ class SessionState(StrEnum):
     STARTING = "starting"
     RUNNING = "running"
     PAUSED = "paused"
+    POWERED_OFF = "powered_off"
     STOPPED = "stopped"
     FAILED = "failed"
     EXPIRED = "expired"
 
 
 ACTIVE_SESSION_STATES = frozenset(
-    {SessionState.STARTING, SessionState.RUNNING, SessionState.PAUSED}
+    {
+        SessionState.STARTING,
+        SessionState.RUNNING,
+        SessionState.PAUSED,
+        SessionState.POWERED_OFF,
+    }
 )
 MAX_DEBUG_BREAKPOINTS = 32
 MAX_UNIX_SOCKET_PATH_BYTES = 107
@@ -90,6 +96,7 @@ class SessionRecord:
     trace_reader_task: asyncio.Task[None] | None = None
     serial_buffer: deque[bytes] = field(default_factory=lambda: deque(maxlen=256))
     subscribers: set[asyncio.Queue[bytes | None]] = field(default_factory=set)
+    lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     qmp_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     gdb_client: GdbRemoteClient | None = None
     debug_run_task: asyncio.Task[None] | None = None
@@ -112,6 +119,10 @@ class SessionRecord:
     trace_events_dropped: int = 0
     trace_event_counts: dict[str, int] = field(default_factory=dict, repr=False)
     trace_truncation_reported: bool = False
+    virtual_imu_state: tuple[
+        tuple[float, float, float], tuple[float, float, float]
+    ] | None = field(default=None, repr=False)
+    virtual_power_state: tuple[int, int, bool] | None = field(default=None, repr=False)
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -293,17 +304,18 @@ class SessionManager:
         if replay_task and replay_task is not asyncio.current_task():
             replay_task.cancel()
             await asyncio.gather(replay_task, return_exceptions=True)
-        await self._terminate_worker(session)
-        self._clear_private_session_data(session)
-        session.state = SessionState.EXPIRED if expired else SessionState.STOPPED
-        self._record_event(
-            session,
-            "lifecycle",
-            "session.expired" if expired else "session.stopped",
-            "service",
-        )
-        self._publish(session, None)
-        shutil.rmtree(session.runtime_directory, ignore_errors=True)
+        async with session.lifecycle_lock:
+            await self._terminate_worker(session)
+            self._clear_private_session_data(session)
+            session.state = SessionState.EXPIRED if expired else SessionState.STOPPED
+            self._record_event(
+                session,
+                "lifecycle",
+                "session.expired" if expired else "session.stopped",
+                "service",
+            )
+            self._publish(session, None)
+            shutil.rmtree(session.runtime_directory, ignore_errors=True)
         return session
 
     async def write_serial(self, session_id: str, payload: bytes) -> None:
@@ -360,6 +372,7 @@ class SessionManager:
         arguments = qmp_imu_sample(session.board, acceleration_g, angular_velocity_dps)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+        session.virtual_imu_state = (acceleration_g, angular_velocity_dps)
         self._record_input(
             session,
             ReplayAction(
@@ -385,6 +398,7 @@ class SessionManager:
         arguments = qmp_power_state(session.board, battery_mv, vin_mv, charging)
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, "qom-set", arguments)
+        session.virtual_power_state = (battery_mv, vin_mv, charging)
         self._record_input(
             session,
             ReplayAction(
@@ -556,6 +570,34 @@ class SessionManager:
         self._record_event(session, "control", "session.reset", "user")
         return session
 
+    async def power_off(self, session_id: str) -> SessionRecord:
+        session = self.get(session_id)
+        async with session.lifecycle_lock:
+            self._require_live_input(session)
+            if session.state not in {SessionState.RUNNING, SessionState.PAUSED}:
+                raise SessionTransitionError(
+                    f"cannot power off session in {session.state} state"
+                )
+            action = ReplayAction(self._offset_ms(session), "power_off", None)
+            await self._power_off_worker(session)
+            self._append_replay_action(session, action)
+            self._record_event(session, "control", "session.powered_off", "user")
+        return session
+
+    async def power_on(self, session_id: str) -> SessionRecord:
+        session = self.get(session_id)
+        async with session.lifecycle_lock:
+            self._require_live_input(session)
+            if session.state is not SessionState.POWERED_OFF:
+                raise SessionTransitionError(
+                    f"cannot power on session in {session.state} state"
+                )
+            action = ReplayAction(self._offset_ms(session), "power_on", None)
+            await self._power_on_worker(session)
+            self._append_replay_action(session, action)
+            self._record_event(session, "control", "session.powered_on", "user")
+        return session
+
     def list_events(
         self, session_id: str, *, after: int = 0, limit: int = 200
     ) -> dict[str, object]:
@@ -635,6 +677,7 @@ class SessionManager:
         session.replay_status = "queued"
         session.replay_speed = speed
         session.replay_error = None
+        session.accept_live_input = False
         self._record_event(
             session,
             "replay",
@@ -677,6 +720,8 @@ class SessionManager:
             session.trace_events_dropped = 0
             session.trace_event_counts.clear()
             session.trace_truncation_reported = False
+            session.virtual_imu_state = None
+            session.virtual_power_state = None
             session.state = SessionState.STARTING
             await self._launch(session)
             self._record_event(
@@ -695,8 +740,13 @@ class SessionManager:
                     await asyncio.sleep(delay)
                 replayed_action, public_data = await self._apply_replay_action(session, action)
                 self._append_replay_action(session, replayed_action)
-                event_category = "control" if action.type == "reset" else "input"
-                event_type = "session.reset" if action.type == "reset" else f"input.{action.type}"
+                control_event_types = {
+                    "reset": "session.reset",
+                    "power_off": "session.powered_off",
+                    "power_on": "session.powered_on",
+                }
+                event_category = "control" if action.type in control_event_types else "input"
+                event_type = control_event_types.get(action.type, f"input.{action.type}")
                 self._record_event(
                     session,
                     event_category,
@@ -745,6 +795,12 @@ class SessionManager:
             process.stdin.write(payload)
             await process.stdin.drain()
             return ReplayAction(offset_ms, "serial", payload), serial_metadata(payload)
+        if action.type == "power_off":
+            await self._power_off_worker(session)
+            return ReplayAction(offset_ms, "power_off", None), {}
+        if action.type == "power_on":
+            await self._power_on_worker(session)
+            return ReplayAction(offset_ms, "power_on", None), {}
         if action.type == "key":
             key, pressed = action.payload  # type: ignore[misc]
             arguments = qmp_key_event(session.board, key, pressed)
@@ -778,7 +834,61 @@ class SessionManager:
             return ReplayAction(offset_ms, "reset", None), {}
         async with session.qmp_lock:
             await execute_qmp(session.qmp_socket_path, command, arguments)
+        if action.type == "imu":
+            session.virtual_imu_state = action.payload  # type: ignore[assignment]
+        elif action.type == "power":
+            session.virtual_power_state = action.payload  # type: ignore[assignment]
         return ReplayAction(offset_ms, action.type, action.payload), public_data
+
+    async def _power_off_worker(self, session: SessionRecord) -> None:
+        await self._terminate_worker(session)
+        session.state = SessionState.POWERED_OFF
+        session.exit_code = None
+        self._publish(session, None)
+
+    async def _power_on_worker(self, session: SessionRecord) -> None:
+        session.qmp_socket_path.unlink(missing_ok=True)
+        session.gdb_socket_path.unlink(missing_ok=True)
+        (session.runtime_directory / "framebuffer.ppm").unlink(missing_ok=True)
+        session.serial_buffer.clear()
+        session.serial_output_bytes = 0
+        session.debug_breakpoints.clear()
+        session.debug_stop_reason = None
+        session.exit_code = None
+        session.trace_events_recorded = 0
+        session.trace_events_dropped = 0
+        session.trace_event_counts.clear()
+        session.trace_truncation_reported = False
+        session.state = SessionState.STARTING
+        try:
+            await self._launch(session)
+            await self._restore_virtual_environment(session)
+        except Exception:
+            await self._terminate_worker(session)
+            session.state = SessionState.FAILED
+            self._clear_private_session_data(session)
+            shutil.rmtree(session.runtime_directory, ignore_errors=True)
+            self._publish(session, None)
+            raise
+
+    async def _restore_virtual_environment(self, session: SessionRecord) -> None:
+        if not self._settings.worker_qmp_enabled:
+            return
+        async with session.qmp_lock:
+            if session.virtual_imu_state is not None:
+                acceleration_g, angular_velocity_dps = session.virtual_imu_state
+                await execute_qmp(
+                    session.qmp_socket_path,
+                    "qom-set",
+                    qmp_imu_sample(session.board, acceleration_g, angular_velocity_dps),
+                )
+            if session.virtual_power_state is not None:
+                battery_mv, vin_mv, charging = session.virtual_power_state
+                await execute_qmp(
+                    session.qmp_socket_path,
+                    "qom-set",
+                    qmp_power_state(session.board, battery_mv, vin_mv, charging),
+                )
 
     async def _terminate_worker(self, session: SessionRecord) -> None:
         await self._close_debugger(session)
@@ -821,6 +931,8 @@ class SessionManager:
         session.initial_flash_image = b""
         session.replay_actions.clear()
         session.serial_buffer.clear()
+        session.virtual_imu_state = None
+        session.virtual_power_state = None
 
     def _append_replay_action(self, session: SessionRecord, action: ReplayAction) -> None:
         if len(session.replay_actions) >= self._settings.max_recording_events:

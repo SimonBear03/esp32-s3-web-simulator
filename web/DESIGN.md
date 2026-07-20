@@ -30,7 +30,10 @@ runtime inspector, and the serial dock.
   RGB framebuffer. The Cardputer keyboard and StickS3 buttons remain native
   buttons.
 - `Inspector` owns typed board inputs, browser-only backtrace symbolication, and
-  bounded debugger controls. It never exposes raw QMP or GDB.
+  bounded debugger controls. Its Power section owns explicit power-off/power-on
+  controls: the powered-off shell remains visible and locked, live streams and
+  reset are unavailable, and Stop remains available. It never exposes raw QMP
+  or GDB.
 - `SerialDock` owns the bounded UART transcript, command input, and a compact
   browser-derived strip for function addresses found in the recent UART tail.
 - At desktop widths the workbench is a three-column open grid above a docked

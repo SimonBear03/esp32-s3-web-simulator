@@ -16,7 +16,7 @@ from esp32_s3_simulator.api import (
     SessionReplayMessage,
     create_app,
 )
-from esp32_s3_simulator.sessions import SessionState
+from esp32_s3_simulator.sessions import SessionState, WorkerUnavailableError
 from esp32_s3_simulator.settings import Settings
 
 
@@ -82,6 +82,8 @@ def test_input_message_contract_rejects_untyped_payloads() -> None:
         PowerInputMessage,
     )
     assert SessionControlMessage.model_validate({"action": "pause"}).action == "pause"
+    assert SessionControlMessage.model_validate({"action": "power-off"}).action == "power-off"
+    assert SessionControlMessage.model_validate({"action": "power-on"}).action == "power-on"
     assert SessionReplayMessage.model_validate({}).speed == 1.0
     assert (
         DebugMemoryReadMessage.model_validate({"address": 0x42000000, "length": 4096}).length
@@ -128,6 +130,31 @@ async def test_session_control_contract_rejects_invalid_or_missing_sessions(
 
     assert invalid.status_code == 422
     assert missing.status_code == 404
+
+
+async def test_failed_power_on_is_reported_as_worker_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_app(disabled_settings(tmp_path))
+    manager = app.state.session_manager
+
+    async def power_on(session_id: str) -> None:
+        assert session_id == "session-id"
+        raise WorkerUnavailableError("cold boot failed")
+
+    monkeypatch.setattr(manager, "power_on", power_on)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://simulator.test"
+        ) as client,
+    ):
+        response = await client.post(
+            "/v1/sessions/session-id/control", json={"action": "power-on"}
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "cold boot failed"
 
 
 async def test_recording_diagnostics_and_replay_api_contract(

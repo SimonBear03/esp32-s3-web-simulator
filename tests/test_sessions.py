@@ -77,6 +77,112 @@ async def test_manager_rejects_runtime_root_that_cannot_fit_private_sockets(
         await SessionManager(settings).start()
 
 
+async def test_power_cycle_stops_and_relaunches_worker_without_restoring_flash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    process = FakeWorkerProcess()
+    session.process = process
+    session.flash_path.write_bytes(b"mutated-nvs")
+    session.virtual_power_state = (3750, 0, False)
+    session.qmp_socket_path.touch()
+    session.gdb_socket_path.touch()
+    qmp_calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    powered_off = await manager.power_off(session.id)
+
+    assert process.terminated is True
+    assert powered_off.state is SessionState.POWERED_OFF
+    assert powered_off.exit_code is None
+    assert powered_off.flash_path.read_bytes() == b"mutated-nvs"
+    assert powered_off.replay_actions[-1].type == "power_off"
+
+    async def launch(next_session: SessionRecord) -> None:
+        assert next_session.state is SessionState.STARTING
+        assert next_session.flash_path.read_bytes() == b"mutated-nvs"
+        assert not next_session.qmp_socket_path.exists()
+        assert not next_session.gdb_socket_path.exists()
+        next_session.state = SessionState.RUNNING
+
+    async def execute_qmp(
+        _socket: Path, command: str, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        qmp_calls.append((command, arguments))
+        return {}
+
+    monkeypatch.setattr(manager, "_launch", launch)
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+    powered_on = await manager.power_on(session.id)
+
+    assert powered_on.state is SessionState.RUNNING
+    assert powered_on.generation == 1
+    assert [command for command, _arguments in qmp_calls] == ["qom-set"]
+    assert [action.type for action in powered_on.replay_actions] == [
+        "power_off",
+        "power_on",
+    ]
+
+    with pytest.raises(SessionTransitionError, match="cannot power on"):
+        await manager.power_on(session.id)
+
+
+async def test_failed_power_on_destroys_private_session_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.state = SessionState.POWERED_OFF
+    session.initial_flash_image = b"private-original"
+    session.flash_path.write_bytes(b"private-mutated-nvs")
+    session.replay_actions.append(ReplayAction(1, "serial", b"private-uart"))
+    session.virtual_power_state = (3750, 0, False)
+
+    async def launch(_session: SessionRecord) -> None:
+        raise WorkerUnavailableError("cold boot failed")
+
+    monkeypatch.setattr(manager, "_launch", launch)
+
+    with pytest.raises(WorkerUnavailableError, match="cold boot failed"):
+        await manager.power_on(session.id)
+
+    assert session.state is SessionState.FAILED
+    assert session.initial_flash_image == b""
+    assert not session.replay_actions
+    assert session.virtual_power_state is None
+    assert not session.runtime_directory.exists()
+
+
+async def test_stop_cannot_be_overtaken_by_inflight_power_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.state = SessionState.POWERED_OFF
+    session.initial_flash_image = b"private-original"
+    session.flash_path.write_bytes(b"private-mutated-nvs")
+    launch_started = asyncio.Event()
+    finish_launch = asyncio.Event()
+
+    async def launch(_session: SessionRecord) -> None:
+        launch_started.set()
+        await finish_launch.wait()
+        _session.state = SessionState.RUNNING
+
+    monkeypatch.setattr(manager, "_launch", launch)
+    power_on_task = asyncio.create_task(manager.power_on(session.id))
+    await launch_started.wait()
+    stop_task = asyncio.create_task(manager.stop(session.id))
+    await asyncio.sleep(0)
+
+    assert not stop_task.done()
+    finish_launch.set()
+    await power_on_task
+    stopped = await stop_task
+
+    assert stopped.state is SessionState.STOPPED
+    assert stopped.initial_flash_image == b""
+    assert not stopped.replay_actions
+    assert not stopped.runtime_directory.exists()
+
+
 class FakeWorkerProcess:
     def __init__(self) -> None:
         self.stdin = None
@@ -355,6 +461,9 @@ async def test_replay_restores_initial_flash_and_reapplies_recorded_input(
     queued = await manager.start_replay(session.id, 1.0)
     task = session.replay_task
     assert task is not None
+    assert session.accept_live_input is False
+    with pytest.raises(RuntimeError, match="replay is running"):
+        await manager.power_off(session.id)
     await task
 
     assert queued["status"] == "queued"
@@ -364,6 +473,63 @@ async def test_replay_restores_initial_flash_and_reapplies_recorded_input(
     assert [call[0] for call in qmp_calls] == ["input-send-event"]
     assert len(session.replay_actions) == 1
     assert manager.list_events(session.id)["events"][-1]["type"] == "replay.completed"  # type: ignore[index]
+
+
+async def test_replay_reproduces_a_cold_power_cycle_and_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, session = manager_with_session(tmp_path)
+    session.initial_flash_image = b"original-flash-image"
+    session.flash_path.write_bytes(b"mutated-nvs-state")
+    session.replay_actions.extend(
+        (
+            ReplayAction(0, "power", (3710, 0, False)),
+            ReplayAction(1, "power_off", None),
+            ReplayAction(2, "power_on", None),
+        )
+    )
+    launch_count = 0
+    terminate_count = 0
+    qmp_calls: list[str] = []
+
+    async def terminate_worker(_session: SessionRecord) -> None:
+        nonlocal terminate_count
+        terminate_count += 1
+        _session.process = None
+        _session.reader_task = None
+
+    async def launch(_session: SessionRecord) -> None:
+        nonlocal launch_count
+        launch_count += 1
+        _session.state = SessionState.RUNNING
+
+    async def execute_qmp(
+        _socket: Path, command: str, _arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        qmp_calls.append(command)
+        return {}
+
+    monkeypatch.setattr(manager, "_terminate_worker", terminate_worker)
+    monkeypatch.setattr(manager, "_launch", launch)
+    monkeypatch.setattr(sessions_module, "execute_qmp", execute_qmp)
+
+    await manager.start_replay(session.id, 1.0)
+    task = session.replay_task
+    assert task is not None
+    await task
+
+    assert session.replay_status == "completed"
+    assert session.state is SessionState.RUNNING
+    assert session.generation == 2
+    assert session.virtual_power_state == (3710, 0, False)
+    assert [action.type for action in session.replay_actions] == [
+        "power",
+        "power_off",
+        "power_on",
+    ]
+    assert launch_count == 2
+    assert terminate_count == 2
+    assert qmp_calls == ["qom-set", "qom-set"]
 
 
 async def test_worker_peripheral_trace_is_parsed_and_capped(tmp_path: Path) -> None:

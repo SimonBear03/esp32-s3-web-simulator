@@ -35,7 +35,16 @@ class SessionEvent:
 @dataclass(frozen=True, slots=True)
 class ReplayAction:
     offset_ms: int
-    type: Literal["key", "button", "imu", "power", "serial", "reset"]
+    type: Literal[
+        "key",
+        "button",
+        "imu",
+        "power",
+        "serial",
+        "reset",
+        "power_off",
+        "power_on",
+    ]
     payload: object
 
 

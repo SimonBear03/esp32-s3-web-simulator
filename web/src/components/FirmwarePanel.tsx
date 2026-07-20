@@ -70,7 +70,8 @@ export function FirmwarePanel({
   } | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const active = Boolean(
-    session && ["starting", "running", "paused"].includes(session.state),
+    session &&
+      ["starting", "running", "paused", "powered_off"].includes(session.state),
   );
   const wasActive = useRef(false);
 

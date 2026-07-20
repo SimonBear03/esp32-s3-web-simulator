@@ -234,6 +234,15 @@ output {
   background: var(--amber);
 }
 
+.session-state[data-state="powered_off"] {
+  color: var(--text-muted);
+}
+
+.session-state[data-state="powered_off"] .state-dot {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
+
 .session-state[data-state="failed"],
 .session-state[data-state="expired"] {
   color: var(--red);
@@ -1768,6 +1777,19 @@ output {
 
 .apply-button {
   width: 100%;
+  margin-top: 13px;
+}
+
+.power-cycle-card {
+  padding-bottom: 17px;
+  margin-bottom: 17px;
+  border-bottom: 1px solid var(--border);
+}
+
+.power-cycle-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
   margin-top: 13px;
 }
 

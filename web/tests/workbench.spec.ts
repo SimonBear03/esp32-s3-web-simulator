@@ -97,6 +97,64 @@ test("validates a merged image and switches idle board profiles", async ({
   ).toBeVisible();
 });
 
+test("cold-boots the same private flash through explicit power controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  let currentSession = { ...runningSession };
+  const controlActions: string[] = [];
+  await page.route("**/v1/sessions", (route) =>
+    route.fulfill({ status: 201, json: currentSession }),
+  );
+  await page.route(`**/v1/sessions/${sessionId}`, (route) =>
+    route.fulfill({ json: currentSession }),
+  );
+  await page.route(`**/v1/sessions/${sessionId}/control`, async (route) => {
+    const body = (await route.request().postDataJSON()) as { action: string };
+    controlActions.push(body.action);
+    currentSession = {
+      ...currentSession,
+      state: body.action === "power-off" ? "powered_off" : "running",
+    };
+    await route.fulfill({ json: currentSession });
+  });
+  await openWorkbench(page);
+
+  const firmware = Buffer.alloc(4096);
+  firmware.set([0xe9, 0x03, 0x02, 0x00]);
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "firmware-merged.bin",
+    mimeType: "application/octet-stream",
+    buffer: firmware,
+  });
+  await page.getByRole("button", { name: "Start session" }).click();
+  await page.getByRole("tab", { name: "Power" }).click();
+
+  const powerOff = page.getByRole("button", { name: "Power off" });
+  const powerOn = page.getByRole("button", { name: "Power on" });
+  await expect(powerOff).toBeEnabled();
+  await expect(powerOn).toBeDisabled();
+  await powerOff.click();
+
+  await expect(page.getByText("Powered off")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reset" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stop" })).toBeEnabled();
+  await expect(powerOff).toBeDisabled();
+  await expect(powerOn).toBeEnabled();
+  if (process.env.SIMULATOR_CAPTURE_DIR) {
+    await page.screenshot({
+      path: `${process.env.SIMULATOR_CAPTURE_DIR}/power-cycle-off-desktop.png`,
+      fullPage: true,
+    });
+  }
+
+  await powerOn.click();
+  await expect(page.getByText("Running")).toBeVisible();
+  await expect(powerOff).toBeEnabled();
+  await expect(powerOn).toBeDisabled();
+  expect(controlActions).toEqual(["power-off", "power-on"]);
+});
+
 test("keeps account saves explicit and runs them in a fresh session", async ({
   page,
 }) => {

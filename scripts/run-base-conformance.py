@@ -286,6 +286,45 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 await wait_for_text(session, "SIM:HEARTBEAT", count=heartbeat_count + 1)
 
+                flash_path = session.flash_path
+                await manager.power_off(session.id)
+                if session.state is not SessionState.POWERED_OFF:
+                    raise RuntimeError("session did not enter powered-off state")
+                if session.process is not None or not flash_path.is_file():
+                    raise RuntimeError("powered-off session did not retain only private flash")
+                await manager.power_on(session.id)
+                if session.state is not SessionState.RUNNING:
+                    raise RuntimeError("session did not cold-boot back to running state")
+                expected_boot_count += 1
+                await wait_for_text(
+                    session,
+                    f"SIM:NVS boot_count={expected_boot_count} "
+                    f"write_bytes=4 readback={expected_boot_count}",
+                )
+                if board.id == "cardputer-adv":
+                    await wait_for_text(
+                        session,
+                        "SIM:IMU_RAW ax=4096 ay=0 az=0 gx=0 gy=0 gz=4096",
+                    )
+                    await wait_for_text(
+                        session,
+                        "SIM:POWER battery_mv=3704 adc_raw=2001 source=adc "
+                        "charging=unavailable",
+                    )
+                else:
+                    await wait_for_text(
+                        session,
+                        "SIM:IMU_RAW ax=4096 ay=0 az=0 gx=0 gy=0 gz=4096",
+                    )
+                    await wait_for_text(
+                        session,
+                        "SIM:POWER battery_mv=3700 vin_mv=0 source=2 charging=0",
+                    )
+                print(
+                    f"SIM:POWER_CYCLE profile={board.id} "
+                    f"boot_count={expected_boot_count} environment=restored"
+                )
+
             heartbeat_count = serial_text(session).count("SIM:HEARTBEAT")
             await manager.write_serial(session.id, b"reset\n")
             expected_boot_count += 1
@@ -321,7 +360,9 @@ async def run(args: argparse.Namespace) -> None:
                 replayed_inputs = sum(
                     event.generation == session.generation
                     and event.source == "replay"
-                    and event.type.startswith(("input.", "session.reset"))
+                    and event.type.startswith(
+                        ("input.", "session.reset", "session.powered_")
+                    )
                     for event in session.events
                 )
                 if replayed_inputs != original_action_count:
