@@ -6,8 +6,11 @@ import type {
   HostedAccessConfig,
   AnonymousHeartbeat,
   InputEvent,
+  HostedLoginResult,
   MemoryRead,
   ReplayStatus,
+  SavedApp,
+  SavedAppList,
   SessionEventPage,
   SimulationSession,
 } from "./types";
@@ -36,6 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new SimulatorApiError(detail, response.status);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -54,8 +58,35 @@ function isHostedAccessConfig(value: unknown): value is HostedAccessConfig {
     (typeof config.heartbeat_interval_seconds === "number" ||
       config.heartbeat_interval_seconds === null) &&
     (typeof config.session_lifetime_seconds === "number" ||
-      config.session_lifetime_seconds === null)
+      config.session_lifetime_seconds === null) &&
+    (typeof config.saved_apps_enabled === "boolean" ||
+      config.saved_apps_enabled === undefined) &&
+    (typeof config.saved_app_limit === "number" ||
+      config.saved_app_limit === null ||
+      config.saved_app_limit === undefined) &&
+    (config.auth_mode === "local" ||
+      config.auth_mode === "supabase" ||
+      config.auth_mode === undefined) &&
+    (typeof config.anonymous_enabled === "boolean" ||
+      config.anonymous_enabled === undefined) &&
+    (typeof config.supabase_url === "string" ||
+      config.supabase_url === null ||
+      config.supabase_url === undefined) &&
+    (typeof config.supabase_publishable_key === "string" ||
+      config.supabase_publishable_key === null ||
+      config.supabase_publishable_key === undefined)
   );
+}
+
+export function exchangeSupabaseSession(accessToken: string): Promise<HostedLoginResult> {
+  return request("/auth/exchange", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function logoutHostedSession(): Promise<void> {
+  return request("/auth/logout", { method: "POST" });
 }
 
 export async function getHostedAccessConfig(
@@ -107,6 +138,60 @@ export function createSession(
   data.set("board_id", boardId);
   data.set("firmware", firmware, firmware.name);
   return request("/v1/sessions", { method: "POST", body: data });
+}
+
+export function listSavedApps(signal?: AbortSignal): Promise<SavedAppList> {
+  return request("/v1/saved-apps", { signal });
+}
+
+function savedAppPath(
+  path: string,
+  name: string,
+  boardId: string,
+): string {
+  const query = new URLSearchParams({ name, board_id: boardId });
+  return `${path}?${query}`;
+}
+
+export function createSavedApp(
+  name: string,
+  boardId: string,
+  firmware: File,
+): Promise<SavedApp> {
+  return request(savedAppPath("/v1/saved-apps", name, boardId), {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: firmware,
+  });
+}
+
+export function replaceSavedApp(
+  appId: string,
+  name: string,
+  boardId: string,
+  firmware: File,
+): Promise<SavedApp> {
+  return request(savedAppPath(`/v1/saved-apps/${appId}`, name, boardId), {
+    method: "PUT",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: firmware,
+  });
+}
+
+export function renameSavedApp(appId: string, name: string): Promise<SavedApp> {
+  return request(`/v1/saved-apps/${appId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteSavedApp(appId: string): Promise<void> {
+  return request(`/v1/saved-apps/${appId}`, { method: "DELETE" });
+}
+
+export function runSavedApp(appId: string): Promise<SimulationSession> {
+  return request(`/v1/saved-apps/${appId}/sessions`, { method: "POST" });
 }
 
 export function getSession(sessionId: string): Promise<SimulationSession> {

@@ -16,6 +16,7 @@ The initial deployment direction is server-side emulation:
 ```text
 Browser client
   device UI, input, serial, bounded hosted-access UI
+  optional Supabase browser session using publishable project configuration
              |
         documented WebSocket/API protocol
              |
@@ -36,11 +37,29 @@ The browser protocol should remain engine-neutral so a future open-source
 client-side WebAssembly engine can implement the same contract.
 
 The hosted-access extension is optional and same-origin. A missing
-`/anonymous/config` route means standalone mode. In public hosting, Turnstile
-verification is delegated over a protected Unix socket to a minimal process
-that has the Turnstile secret and fixed Cloudflare egress but no database,
-Docker, core, worker, or firmware authority. This avoids granting general
-internet egress or the challenge secret to the gateway process.
+`/anonymous/config` route means standalone mode. The response may advertise a
+Supabase account flow, anonymous access, or both. In account mode the browser
+uses only the configured project URL and publishable key, then exchanges a
+short-lived access token for an opaque gateway cookie. Production token
+verification and user-to-owner mapping belong to the private gateway; neither
+the token nor Supabase dependency enters the simulator core.
+
+In anonymous mode, Turnstile verification is delegated over a protected Unix
+socket to a minimal process that has the Turnstile secret and fixed Cloudflare
+egress but no database, Docker, core, worker, or firmware authority. The account
+verifier follows the same separate-UID pattern with only a publishable key and a
+fixed Supabase user-validation request. This avoids granting internet egress or
+either verifier responsibility to the gateway process.
+
+The same optional response can advertise account-only saved apps. The public
+workbench then shows a ten-slot library only when `access_kind=account` and
+`saved_apps_enabled=true`. Saving is a separate explicit action from starting a
+session; a selected image is never persisted just because it is run. The
+browser sends raw firmware only to the owner-scoped hosted storage route and
+never receives storage keys, object IDs, ciphertext, or another account's
+metadata. Running a slot asks the gateway to create a normal fresh core
+session, so the public core remains account- and retention-unaware. Anonymous
+capabilities never see the library.
 
 ## Initial Device Models
 

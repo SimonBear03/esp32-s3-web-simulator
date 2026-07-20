@@ -24,6 +24,15 @@ CSRF/origin policy, per-user quotas, rate limits, and keeping opaque session IDs
 bound to the account that created them. The public core service must not be
 exposed directly to the internet without that gateway or equivalent controls.
 
+For optional Supabase account access, the browser receives only the project URL
+and publishable key. It sends the current access token to the same-origin
+gateway once for exchange; a peer-credential-gated verifier with no database,
+firmware, storage-key, worker, or Docker access validates it against the fixed
+Supabase user endpoint. The gateway stores only a stable owner mapping and hash
+of its own short-lived HttpOnly cookie, never the Supabase access or refresh
+token. Local password mode is a development facility and is refused by the
+production gateway configuration.
+
 For optional anonymous access, the browser receives only a public Turnstile
 site key. The gateway validates a single-use token through a separate,
 peer-credential-gated verifier process that alone holds the secret and internet
@@ -42,6 +51,14 @@ independent reconciliation loop. The hosted anonymous surface omits debugger,
 diagnostics, and replay routes; signed-in accounts retain the full bounded
 tooling. Anonymous access stays disabled unless the verifier, OCI broker, core,
 and static workbench all pass readiness.
+
+Optional saved-app storage belongs to the private gateway, not this public core.
+The public client renders it only for a gateway-confirmed account, keeps save
+separate from run, and cannot access storage encryption keys or paths. The
+gateway must enforce ownership and its ten-slot limit independently of the UI,
+encrypt firmware at rest with authenticated metadata, and copy a decrypted slot
+only into a fresh ephemeral worker. Anonymous and ordinary-upload firmware must
+remain excluded from that store and its backups.
 
 ## Worker controls already enforced
 
@@ -111,6 +128,12 @@ session. Diagnostics are explicit, access-controlled by the hosting gateway,
 size-bounded, and exclude firmware, mutated flash, framebuffer pixels, debug
 memory, and UART payloads. The replay baseline and private UART actions never
 cross the public API.
+
+A hosting gateway may offer an explicit account-only saved copy as a separate
+product feature. That exception does not change the core's lifecycle: every
+core worker, mutated flash/NVS, UART stream, framebuffer, and replay baseline
+remain ephemeral, and deleting a worker never writes them back into a saved
+slot.
 
 QEMU documents the GDB stub's lack of authentication and recommends securing
 its endpoint separately: <https://www.qemu.org/docs/master/system/gdb.html>.

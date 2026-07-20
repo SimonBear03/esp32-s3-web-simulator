@@ -2,6 +2,7 @@
 
 import {
   Cpu,
+  LogOut,
   Pause,
   Play,
   RotateCw,
@@ -21,6 +22,9 @@ interface AppHeaderProps {
   onResume: () => void;
   onReset: () => void;
   onStop: () => void;
+  accountAccess: boolean;
+  onSignOut: () => void;
+  signingOut: boolean;
 }
 
 const STATE_LABELS: Record<AppHeaderProps["sessionState"], string> = {
@@ -43,6 +47,9 @@ export function AppHeader({
   onResume,
   onReset,
   onStop,
+  accountAccess,
+  onSignOut,
+  signingOut,
 }: AppHeaderProps) {
   const active = ["starting", "running", "paused"].includes(sessionState);
   const running = sessionState === "running";
@@ -116,6 +123,17 @@ export function AppHeader({
           <Square size={13} fill="currentColor" />
           <span>Stop</span>
         </button>
+        {accountAccess ? (
+          <button
+            className="tool-button"
+            disabled={active || busy || signingOut}
+            onClick={onSignOut}
+            type="button"
+          >
+            <LogOut size={14} />
+            <span>Sign out</span>
+          </button>
+        ) : null}
       </div>
     </header>
   );

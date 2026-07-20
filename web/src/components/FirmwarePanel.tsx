@@ -3,18 +3,22 @@
 import { Check, FileCode2, Upload, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import type { SavedAppsController } from "../hooks/useSavedApps";
 import {
   formatBytes,
   inspectFirmware,
   type FirmwareInspection,
 } from "../lib/firmware";
-import type { BoardProfile, SimulationSession } from "../lib/types";
+import type { BoardProfile, SavedApp, SimulationSession } from "../lib/types";
+import { SavedAppsSection } from "./SavedAppsSection";
 
 interface FirmwarePanelProps {
   board: BoardProfile;
   session: SimulationSession | null;
   starting: boolean;
   onStart: (file: File) => Promise<void>;
+  savedApps: SavedAppsController | null;
+  onRunSaved: (app: SavedApp) => Promise<void>;
 }
 
 export function FirmwarePanel({
@@ -22,6 +26,8 @@ export function FirmwarePanel({
   session,
   starting,
   onStart,
+  savedApps,
+  onRunSaved,
 }: FirmwarePanelProps) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -126,6 +132,18 @@ export function FirmwarePanel({
           </div>
         ) : null}
       </section>
+
+      {savedApps ? (
+        <SavedAppsSection
+          board={board}
+          file={file}
+          fileValid={inspection?.valid ?? false}
+          onRun={onRunSaved}
+          savedApps={savedApps}
+          sessionActive={Boolean(active)}
+          sessionStarting={starting}
+        />
+      ) : null}
 
       <section className="rail-section validation-section">
         <div className="rail-heading">Local checks</div>

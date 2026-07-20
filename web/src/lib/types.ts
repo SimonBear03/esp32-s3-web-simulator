@@ -60,6 +60,7 @@ export interface SimulationSession {
 
 export interface HostedAccessConfig {
   enabled: boolean;
+  anonymous_enabled?: boolean;
   authorized: boolean;
   access_kind: "account" | "anonymous" | null;
   capability: boolean;
@@ -67,6 +68,32 @@ export interface HostedAccessConfig {
   action: string | null;
   heartbeat_interval_seconds: number | null;
   session_lifetime_seconds: number | null;
+  saved_apps_enabled?: boolean;
+  saved_app_limit?: number | null;
+  auth_mode?: "local" | "supabase";
+  supabase_url?: string | null;
+  supabase_publishable_key?: string | null;
+}
+
+export interface HostedLoginResult {
+  authenticated: true;
+  auth_provider: "supabase";
+  username: string;
+  expires_at: number;
+}
+
+export interface SavedApp {
+  id: string;
+  name: string;
+  board_id: BoardId;
+  source_size_bytes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedAppList {
+  apps: SavedApp[];
+  limit: number;
 }
 
 export interface AnonymousHeartbeat {

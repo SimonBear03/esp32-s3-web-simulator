@@ -52,10 +52,16 @@ one validated session bind. Anonymous execution remains disabled until the
 live host acceptance suite proves every layer is active. Both board
 conformance suites already pass through the Bubblewrap rollback boundary.
 The same open-source workbench now detects an optional same-origin hosted
-access contract. When enabled by a deployment it remains locked until a
-server-validated Turnstile challenge creates an HttpOnly anonymous capability,
-then maintains only the short-lived session heartbeat. Standalone/local use is
-unchanged when that contract is absent.
+access contract. A deployment can offer explicit sign-in through a configured
+Supabase publishable key, anonymous access through a server-validated Turnstile
+challenge, or both. The browser exchanges a Supabase access token once for an
+opaque same-origin HttpOnly gateway cookie; the public core never receives that
+token or owns an account database. Anonymous mode maintains only the short-lived
+session heartbeat. Standalone/local use is unchanged when the contract is
+absent. A signed-in hosted gateway may also advertise an encrypted ten-slot app
+library. The workbench keeps “Save selected” separate from “Start session,”
+hides storage entirely from anonymous users, and runs each saved app in a fresh
+temporary core session.
 
 Cardputer Chess is a compatibility and stress application, not the owned
 release gate while that application is itself in progress. Its unmodified
@@ -142,11 +148,22 @@ ownership gateway and hardened service configuration in
 [docs/security.md](docs/security.md); failed isolation never falls back to a
 weaker mode.
 
-The web client treats `/anonymous/config` as optional: a `404` means standalone
-mode. A hosted gateway may instead require a challenge, issue a same-origin
-HttpOnly capability, and require `/v1/sessions/{id}/heartbeat` for an anonymous
-session. The browser never receives the Turnstile secret or stores the
-capability in JavaScript.
+The web client treats `/anonymous/config` as the optional hosted-access contract;
+a `404` means standalone mode. Despite the legacy route name, the response can
+advertise account auth, anonymous auth, or both. In Supabase mode the response
+contains only the project URL and publishable key. The dynamically loaded
+official client persists its browser-origin session, does not inspect URL
+fragments for tokens, and exchanges the current access token through
+`/auth/exchange`; the gateway returns only an HttpOnly cookie. Anonymous mode
+can instead require a challenge and `/v1/sessions/{id}/heartbeat`. The browser
+never receives the Turnstile secret or stores either gateway capability in
+JavaScript.
+
+When the optional hosted response identifies a signed-in account and advertises
+saved apps, the workbench uses owner-scoped `/v1/saved-apps` routes for explicit
+create, replace, rename, list, run, and delete actions. The public core does not
+store accounts or saved firmware; storage encryption, quotas, backup, and
+ownership remain private-gateway responsibilities.
 
 ## Remote
 

@@ -20,6 +20,7 @@ updated before a new component or artifact is committed or distributed.
 | M5Stack M5Unified and M5PM1 libraries | Local reference snapshots; upstream MIT projects | MIT | Not vendored; no source code copied | Cross-checks public Cardputer ADV battery-divider selection, StickS3 initialization sequences, and M5PM1 register use |
 | M5Stack device names | Cardputer ADV and StickS3 compatibility references | Third-party trademarks | Text compatibility references only; no official product artwork | Identifies target hardware profiles |
 | React and React DOM | `19.2.7` | MIT | Installed from the pinned npm lockfile and bundled into the browser client | Browser UI runtime |
+| Supabase JavaScript client | `2.110.7` | MIT | Installed from the pinned npm lockfile and dynamically bundled only when hosted authentication is configured | Browser identity session and access-token exchange with the private gateway; it is not used for simulator storage |
 | Lucide React | `1.25.0` | ISC | Installed from the pinned npm lockfile; selected SVG components are bundled into the browser client | Interface iconography |
 | Vite and `@vitejs/plugin-react` | `8.1.5` and `6.0.3` | MIT | Pinned npm build dependencies; not served as standalone runtime packages | Browser development server and release build |
 | TypeScript and DefinitelyTyped packages | TypeScript `7.0.2`; types pinned in `web/package-lock.json` | Apache-2.0 and MIT | Pinned npm build dependencies; type declarations are not shipped as browser runtime code | Static browser-client validation |

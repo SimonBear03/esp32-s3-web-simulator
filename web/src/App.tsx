@@ -16,6 +16,7 @@ import { SerialDock } from "./components/SerialDock";
 import { StatusBar } from "./components/StatusBar";
 import { useBoardProfiles } from "./hooks/useBoardProfiles";
 import { useHostedAccess } from "./hooks/useHostedAccess";
+import { useSavedApps } from "./hooks/useSavedApps";
 import { useSimulatorSession } from "./hooks/useSimulatorSession";
 import { shortBoardLabel } from "./lib/boards";
 import type { BoardId } from "./lib/types";
@@ -32,6 +33,7 @@ export function App() {
     error,
     inputConnected,
     start,
+    startSaved,
     pause,
     resume,
     reset,
@@ -39,6 +41,10 @@ export function App() {
     sendBoardInput,
     clearError,
   } = useSimulatorSession();
+  const savedAppsEnabled =
+    hostedAccess.config?.access_kind === "account" &&
+    hostedAccess.config.saved_apps_enabled === true;
+  const savedApps = useSavedApps(savedAppsEnabled);
   const board = boards[boardId];
   const active = Boolean(
     session && ["starting", "running", "paused"].includes(session.state),
@@ -71,11 +77,14 @@ export function App() {
         boardId={boardId}
         boardLocked={active}
         busy={busyAction !== null}
+        accountAccess={hostedAccess.config?.access_kind === "account"}
         onBoardChange={changeBoard}
         onPause={() => void pause()}
         onReset={() => void reset()}
         onResume={() => void resume()}
         onStop={() => void stop()}
+        onSignOut={() => void hostedAccess.signOut()}
+        signingOut={hostedAccess.submitting}
         sessionState={session?.state ?? "idle"}
       />
 
@@ -100,7 +109,11 @@ export function App() {
         <ChevronDown size={16} />
       </button>
 
-      <div className="workbench" data-mobile-panel={mobilePanel}>
+      <div
+        className="workbench"
+        data-mobile-panel={mobilePanel}
+        data-mobile-setup-open={setupOpen}
+      >
         <div className="setup-region" data-mobile-open={setupOpen}>
           <FirmwarePanel
             board={board}
@@ -116,6 +129,13 @@ export function App() {
                 setMobilePanel("device");
               }
             }}
+            onRunSaved={async (saved) => {
+              if (active || (await startSaved(saved.id)) === false) return;
+              setBoardId(saved.board_id);
+              setSetupOpen(false);
+              setMobilePanel("device");
+            }}
+            savedApps={savedAppsEnabled ? savedApps : null}
             session={session}
             starting={busyAction === "start"}
           />
