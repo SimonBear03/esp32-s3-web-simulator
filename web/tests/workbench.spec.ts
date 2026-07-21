@@ -64,6 +64,12 @@ const runningSession = {
   replay: { status: "idle", speed: null, error: null },
 };
 
+test.beforeEach(async ({ page }) => {
+  await page.routeWebSocket("**/v1/sessions/**", (socket) => {
+    socket.onMessage(() => undefined);
+  });
+});
+
 async function openWorkbench(page: Page): Promise<void> {
   await page.route("**/anonymous/config", (route) =>
     route.fulfill({ status: 404 }),
@@ -83,7 +89,7 @@ test("validates a merged image and switches idle board profiles", async ({
 
   const firmware = Buffer.alloc(4096);
   firmware.set([0xe9, 0x03, 0x02, 0x00]);
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[accept^=".bin"]').setInputFiles({
     name: "firmware-merged.bin",
     mimeType: "application/octet-stream",
     buffer: firmware,
@@ -122,7 +128,7 @@ test("cold-boots the same private flash through explicit power controls", async 
 
   const firmware = Buffer.alloc(4096);
   firmware.set([0xe9, 0x03, 0x02, 0x00]);
-  await page.locator('input[type="file"]').first().setInputFiles({
+  await page.locator('input[accept^=".bin"]').setInputFiles({
     name: "firmware-merged.bin",
     mimeType: "application/octet-stream",
     buffer: firmware,
@@ -210,7 +216,7 @@ test("keeps account saves explicit and runs them in a fresh session", async ({
 
   const firmware = Buffer.alloc(8192);
   firmware.set([0xe9, 0x03, 0x02, 0x00]);
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[accept^=".bin"]').setInputFiles({
     name: "chess-merged.bin",
     mimeType: "application/octet-stream",
     buffer: firmware,
@@ -250,6 +256,91 @@ test("keeps account saves explicit and runs them in a fresh session", async ({
   await page.getByRole("button", { name: "Run Cardputer Chess" }).click();
   await expect(page.getByText("Running")).toBeVisible();
   await expect(page.getByRole("button", { name: "Save selected" })).toBeDisabled();
+});
+
+test("launches the curated Cardputer Chess demo from desktop and mobile setup", async ({
+  page,
+}) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  await page.setViewportSize({ width: 1536, height: 1024 });
+  await page.route("**/anonymous/config", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        authorized: true,
+        access_kind: "account",
+        capability: false,
+        site_key: null,
+        action: null,
+        heartbeat_interval_seconds: null,
+        session_lifetime_seconds: null,
+        demo_apps_enabled: true,
+      },
+    }),
+  );
+  await page.route("**/v1/boards", (route) =>
+    route.fulfill({ json: boardProfiles }),
+  );
+  await page.route("**/v1/demos", (route) =>
+    route.fulfill({
+      json: {
+        demos: [
+          {
+            id: "cardputer-chess",
+            name: "Cardputer Chess",
+            description: "Complete offline chess on the Cardputer ADV profile.",
+            board_id: "cardputer-adv",
+            source_size_bytes: 687072,
+            firmware_sha256: "d".repeat(64),
+            source_url: "https://github.com/SimonBear03/cardputer-chess",
+            license: "MIT",
+            license_url:
+              "https://github.com/SimonBear03/cardputer-chess/blob/main/LICENSE",
+            notices_url:
+              "https://github.com/SimonBear03/cardputer-chess/blob/main/THIRD_PARTY.md",
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/v1/demos/cardputer-chess/sessions", (route) =>
+    route.fulfill({ status: 201, json: runningSession }),
+  );
+  await page.route(`**/v1/sessions/${sessionId}`, (route) =>
+    route.fulfill({ json: runningSession }),
+  );
+  await page.goto("/");
+
+  await expect(page).toHaveTitle("ESP32-S3 Simulator");
+  await expect(page.getByText("Try a demo")).toBeVisible();
+  await expect(page.getByText("Cardputer Chess")).toBeVisible();
+  await expect(page.getByRole("link", { name: /MIT/ })).toHaveAttribute(
+    "href",
+    "https://github.com/SimonBear03/cardputer-chess/blob/main/LICENSE",
+  );
+  if (process.env.SIMULATOR_CAPTURE_DIR) {
+    await page.screenshot({
+      path: `${process.env.SIMULATOR_CAPTURE_DIR}/curated-demo-desktop.png`,
+      fullPage: true,
+    });
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: /Firmware setup/ }).click();
+  await expect(page.getByRole("button", { name: "Run demo" })).toBeVisible();
+  if (process.env.SIMULATOR_CAPTURE_DIR) {
+    await page.screenshot({
+      path: `${process.env.SIMULATOR_CAPTURE_DIR}/curated-demo-mobile.png`,
+      fullPage: true,
+    });
+  }
+
+  await page.getByRole("button", { name: "Run demo" }).click();
+  await expect(page.getByText("Running")).toBeVisible();
+  expect(consoleErrors).toEqual([]);
 });
 
 test("exchanges a shared Supabase identity before opening account storage", async ({
@@ -451,7 +542,7 @@ test("shows recorded input, diagnostics, and replay in the inspector", async ({
 
   const firmware = Buffer.alloc(4096);
   firmware.set([0xe9, 0x03, 0x02, 0x00]);
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[accept^=".bin"]').setInputFiles({
     name: "firmware-merged.bin",
     mimeType: "application/octet-stream",
     buffer: firmware,

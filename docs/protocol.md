@@ -31,6 +31,22 @@ code when known, non-secret firmware metadata, a monotonic `generation`, and
 bounded recording/replay summaries. Generation `1` is the uploaded baseline;
 each replay increments it after restoring that baseline.
 
+### Optional curated demos
+
+A hosted deployment may advertise `demo_apps_enabled: true` in its optional
+same-origin `/anonymous/config` response. The workbench then reads
+`GET /v1/demos`, whose response contains a `demos` array with an opaque ID,
+display metadata, board ID, source size, pinned firmware SHA-256, and HTTPS
+source/licence/notices links. It never contains a server filesystem path or
+firmware bytes.
+
+`POST /v1/demos/{id}/sessions` starts the selected operator-curated firmware
+through the same session response and quota contract as a normal upload. A
+hosted gateway must authenticate or verify the caller before launch and must
+revalidate the operator-installed artifact against its manifest digest before
+passing it to the core's normal `POST /v1/sessions` route. Demo firmware is an
+optional deployment artifact, not content owned or bundled by this public core.
+
 Production workers enable private QMP and GDB Unix sockets for worker control.
 `SIMULATOR_WORKER_QMP_ENABLED=false` exists only for constrained test sandboxes
 that prohibit local socket binding; it is not a production configuration.

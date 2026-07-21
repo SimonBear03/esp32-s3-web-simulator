@@ -4,6 +4,7 @@ import { Check, FileCode2, FileSearch, Upload, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { SavedAppsController } from "../hooks/useSavedApps";
+import type { DemoAppsController } from "../hooks/useDemoApps";
 import {
   formatBytes,
   inspectFirmware,
@@ -16,7 +17,8 @@ import {
   MAX_ELF_SYMBOL_FILE_BYTES,
   type ElfSymbolIndex,
 } from "../lib/elf";
-import type { BoardProfile, SavedApp, SimulationSession } from "../lib/types";
+import type { BoardProfile, DemoApp, SavedApp, SimulationSession } from "../lib/types";
+import { DemoAppsSection } from "./DemoAppsSection";
 import { SavedAppsSection } from "./SavedAppsSection";
 
 interface FirmwarePanelProps {
@@ -26,6 +28,8 @@ interface FirmwarePanelProps {
   onStart: (file: File, symbols: ElfSymbolIndex | null) => Promise<void>;
   savedApps: SavedAppsController | null;
   onRunSaved: (app: SavedApp) => Promise<void>;
+  demos: DemoAppsController | null;
+  onRunDemo: (demo: DemoApp) => Promise<void>;
 }
 
 function symbolsStatusText(
@@ -52,6 +56,8 @@ export function FirmwarePanel({
   onStart,
   savedApps,
   onRunSaved,
+  demos,
+  onRunDemo,
 }: FirmwarePanelProps) {
   const inputId = useId();
   const symbolsInputId = useId();
@@ -299,6 +305,15 @@ export function FirmwarePanel({
           </p>
         </div>
       </section>
+
+      {demos ? (
+        <DemoAppsSection
+          demos={demos}
+          onRun={onRunDemo}
+          sessionActive={Boolean(active)}
+          sessionStarting={starting}
+        />
+      ) : null}
 
       {savedApps ? (
         <SavedAppsSection

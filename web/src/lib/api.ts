@@ -3,6 +3,7 @@
 import type {
   BoardProfile,
   DebugStatus,
+  DemoAppList,
   HostedAccessConfig,
   AnonymousHeartbeat,
   InputEvent,
@@ -64,6 +65,8 @@ function isHostedAccessConfig(value: unknown): value is HostedAccessConfig {
     (typeof config.saved_app_limit === "number" ||
       config.saved_app_limit === null ||
       config.saved_app_limit === undefined) &&
+    (typeof config.demo_apps_enabled === "boolean" ||
+      config.demo_apps_enabled === undefined) &&
     (config.auth_mode === "local" ||
       config.auth_mode === "supabase" ||
       config.auth_mode === undefined) &&
@@ -192,6 +195,43 @@ export function deleteSavedApp(appId: string): Promise<void> {
 
 export function runSavedApp(appId: string): Promise<SimulationSession> {
   return request(`/v1/saved-apps/${appId}/sessions`, { method: "POST" });
+}
+
+function isDemoAppList(value: unknown): value is DemoAppList {
+  if (!value || typeof value !== "object") return false;
+  const demos = (value as Partial<DemoAppList>).demos;
+  return (
+    Array.isArray(demos) &&
+    demos.every(
+      (demo) =>
+        demo &&
+        typeof demo === "object" &&
+        typeof demo.id === "string" &&
+        typeof demo.name === "string" &&
+        typeof demo.description === "string" &&
+        (demo.board_id === "cardputer-adv" || demo.board_id === "sticks3") &&
+        typeof demo.source_size_bytes === "number" &&
+        typeof demo.firmware_sha256 === "string" &&
+        typeof demo.source_url === "string" &&
+        typeof demo.license === "string" &&
+        typeof demo.license_url === "string" &&
+        typeof demo.notices_url === "string",
+    )
+  );
+}
+
+export async function listDemoApps(signal?: AbortSignal): Promise<DemoAppList> {
+  const value = await request<unknown>("/v1/demos", { signal });
+  if (!isDemoAppList(value)) {
+    throw new SimulatorApiError("Demo apps returned an invalid response", 502);
+  }
+  return value;
+}
+
+export function runDemoApp(demoId: string): Promise<SimulationSession> {
+  return request(`/v1/demos/${encodeURIComponent(demoId)}/sessions`, {
+    method: "POST",
+  });
 }
 
 export function getSession(sessionId: string): Promise<SimulationSession> {

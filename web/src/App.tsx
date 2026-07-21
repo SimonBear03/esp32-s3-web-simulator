@@ -15,6 +15,7 @@ import {
 import { SerialDock } from "./components/SerialDock";
 import { StatusBar } from "./components/StatusBar";
 import { useBoardProfiles } from "./hooks/useBoardProfiles";
+import { useDemoApps } from "./hooks/useDemoApps";
 import { useHostedAccess } from "./hooks/useHostedAccess";
 import { useSavedApps } from "./hooks/useSavedApps";
 import { useSimulatorSession } from "./hooks/useSimulatorSession";
@@ -48,6 +49,7 @@ export function App() {
     inputConnected,
     start,
     startSaved,
+    startDemo,
     pause,
     resume,
     reset,
@@ -61,6 +63,8 @@ export function App() {
     hostedAccess.config?.access_kind === "account" &&
     hostedAccess.config.saved_apps_enabled === true;
   const savedApps = useSavedApps(savedAppsEnabled);
+  const demoAppsEnabled = hostedAccess.config?.demo_apps_enabled === true;
+  const demos = useDemoApps(demoAppsEnabled);
   const board = boards[boardId];
   const active = Boolean(session && ACTIVE_SESSION_STATES.has(session.state));
   const streaming = Boolean(session && STREAM_SESSION_STATES.has(session.state));
@@ -161,6 +165,14 @@ export function App() {
               if (active || (await startSaved(saved.id)) === false) return;
               setDebugSymbols(null);
               setBoardId(saved.board_id);
+              setSetupOpen(false);
+              setMobilePanel("device");
+            }}
+            demos={demoAppsEnabled ? demos : null}
+            onRunDemo={async (demo) => {
+              if (active || (await startDemo(demo.id)) === false) return;
+              setDebugSymbols(null);
+              setBoardId(demo.board_id);
               setSetupOpen(false);
               setMobilePanel("device");
             }}

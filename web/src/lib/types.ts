@@ -71,6 +71,7 @@ export interface HostedAccessConfig {
   session_lifetime_seconds: number | null;
   saved_apps_enabled?: boolean;
   saved_app_limit?: number | null;
+  demo_apps_enabled?: boolean;
   auth_mode?: "local" | "supabase";
   supabase_url?: string | null;
   supabase_publishable_key?: string | null;
@@ -95,6 +96,23 @@ export interface SavedApp {
 export interface SavedAppList {
   apps: SavedApp[];
   limit: number;
+}
+
+export interface DemoApp {
+  id: string;
+  name: string;
+  description: string;
+  board_id: BoardId;
+  source_size_bytes: number;
+  firmware_sha256: string;
+  source_url: string;
+  license: string;
+  license_url: string;
+  notices_url: string;
+}
+
+export interface DemoAppList {
+  demos: DemoApp[];
 }
 
 export interface AnonymousHeartbeat {

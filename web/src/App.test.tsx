@@ -213,4 +213,113 @@ describe("App", () => {
       }),
     );
   });
+
+  it("lists a curated Cardputer Chess demo and launches it without a browser upload", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/anonymous/config")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                enabled: true,
+                authorized: true,
+                access_kind: "account",
+                capability: false,
+                site_key: null,
+                action: null,
+                heartbeat_interval_seconds: null,
+                session_lifetime_seconds: null,
+                demo_apps_enabled: true,
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if (url.endsWith("/v1/demos") && (!init?.method || init.method === "GET")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                demos: [
+                  {
+                    id: "cardputer-chess",
+                    name: "Cardputer Chess",
+                    description: "Complete offline chess on the Cardputer ADV profile.",
+                    board_id: "cardputer-adv",
+                    source_size_bytes: 687072,
+                    firmware_sha256: "a".repeat(64),
+                    source_url: "https://github.com/SimonBear03/cardputer-chess",
+                    license: "MIT",
+                    license_url:
+                      "https://github.com/SimonBear03/cardputer-chess/blob/main/LICENSE",
+                    notices_url:
+                      "https://github.com/SimonBear03/cardputer-chess/blob/main/THIRD_PARTY.md",
+                  },
+                ],
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if (url.includes("/v1/demos/cardputer-chess/sessions") && init?.method === "POST") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: "a".repeat(32),
+                board_id: "cardputer-adv",
+                state: "running",
+                created_at: "2026-07-21T00:00:00Z",
+                expires_at: "2026-07-21T00:02:00Z",
+                exit_code: null,
+                generation: 1,
+                firmware: {
+                  source_size_bytes: 687072,
+                  flash_size_bytes: 8388608,
+                  source_sha256: "a".repeat(64),
+                  flash_sha256: "b".repeat(64),
+                  segment_count: 4,
+                  flash_mode: 2,
+                },
+                recording: {
+                  event_count: 0,
+                  events_dropped: 0,
+                  replayable_action_count: 0,
+                  replayable_actions_dropped: 0,
+                  trace_events_recorded: 0,
+                  trace_events_dropped: 0,
+                },
+                replay: { status: "idle", speed: null, error: null },
+              }),
+              { status: 201, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText("Try a demo")).toBeInTheDocument();
+    expect(await screen.findByText("Cardputer Chess")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /MIT/ })).toHaveAttribute(
+      "href",
+      "https://github.com/SimonBear03/cardputer-chess/blob/main/LICENSE",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Run demo" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/v1/demos/cardputer-chess/sessions",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(screen.getByText("Running")).toBeInTheDocument();
+  });
 });

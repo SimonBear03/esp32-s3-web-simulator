@@ -2,7 +2,12 @@
 
 import { afterEach, vi } from "vitest";
 
-import { controlSession, createSession } from "./api";
+import {
+  controlSession,
+  createSession,
+  listDemoApps,
+  SimulatorApiError,
+} from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -65,5 +70,23 @@ describe("session upload privacy", () => {
     });
     expect(body.has("symbols")).toBe(false);
     expect(body.has("elf")).toBe(false);
+  });
+});
+
+describe("curated demo contract", () => {
+  it("rejects malformed hosted metadata before it reaches the workbench", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ demos: [{ id: "missing-fields" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(listDemoApps()).rejects.toEqual(
+      new SimulatorApiError("Demo apps returned an invalid response", 502),
+    );
   });
 });

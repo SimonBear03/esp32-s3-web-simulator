@@ -526,6 +526,7 @@ output {
   display: flex;
   flex-direction: column;
   padding-bottom: 70px;
+  scroll-padding-bottom: 82px;
 }
 
 .rail-section {
@@ -749,6 +750,100 @@ output {
   line-height: 1.55;
 }
 
+.demo-apps-section {
+  display: grid;
+  gap: 10px;
+}
+
+.demo-apps-section .rail-heading {
+  margin: 0;
+}
+
+.demo-app {
+  display: grid;
+  gap: 11px;
+  padding: 11px;
+  border: 1px solid #40521d;
+  border-radius: 6px;
+  background: linear-gradient(145deg, #12180e 0%, var(--surface-raised) 62%);
+}
+
+.demo-app-title {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.demo-app-title > svg {
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.demo-app-title > div {
+  display: grid;
+  gap: 4px;
+}
+
+.demo-app-title strong {
+  font-size: 11.5px;
+  font-weight: 590;
+}
+
+.demo-app-title span {
+  color: var(--text-muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.demo-app-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.demo-run-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-height: 31px;
+  color: #11170a;
+  border: 1px solid #b8ea43;
+  border-radius: 4px;
+  background: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.demo-run-button:hover:not(:disabled) {
+  background: #c5f45b;
+}
+
+.demo-run-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.demo-app-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.demo-app-links a {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 8.5px;
+  text-decoration: none;
+}
+
+.demo-app-links a:hover {
+  color: var(--text-secondary);
+}
+
 .saved-apps-section {
   display: grid;
   gap: 10px;
@@ -959,10 +1054,11 @@ output {
 }
 
 .rail-action {
-  position: absolute;
-  right: 0;
+  position: sticky;
   bottom: 0;
-  left: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  margin-top: auto;
   padding: 12px 15px;
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface), transparent 4%);

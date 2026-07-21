@@ -10,6 +10,7 @@ import {
   heartbeatAnonymousSession,
   openSessionSocket,
   runSavedApp,
+  runDemoApp,
   sendInput,
   SimulatorApiError,
 } from "../lib/api";
@@ -41,6 +42,7 @@ export interface SimulatorSessionController {
   inputConnected: boolean;
   start: (boardId: BoardId, firmware: File) => Promise<boolean>;
   startSaved: (appId: string) => Promise<boolean>;
+  startDemo: (demoId: string) => Promise<boolean>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   reset: () => Promise<void>;
@@ -197,6 +199,20 @@ export function useSimulatorSession(): SimulatorSessionController {
     }
   }, []);
 
+  const startDemo = useCallback(async (demoId: string) => {
+    setBusyAction("start");
+    setError(null);
+    try {
+      setSession(await runDemoApp(demoId));
+      return true;
+    } catch (startError) {
+      setError(messageFromError(startError));
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  }, []);
+
   const pause = useCallback(
     () => runAction("pause", (sessionId) => controlSession(sessionId, "pause")),
     [runAction],
@@ -241,6 +257,7 @@ export function useSimulatorSession(): SimulatorSessionController {
     inputConnected,
     start,
     startSaved,
+    startDemo,
     pause,
     resume,
     reset,
