@@ -17,7 +17,33 @@ third-party trademarks and artwork.
 - Read this file and `README.md`.
 - Read `docs/architecture.md` before changing runtime boundaries, device
   fidelity, or emulator integration.
+- Read only the current docs and Agent Notes relevant to the affected boundary.
+- Before a durable decision or substantial implementation, follow
+  `agent_notes/README.md`.
 - Run `git status --short --branch` before meaningful edits.
+
+## Development Governance
+
+- Before substantial implementation, clarify the problem, observable outcome,
+  constraints, non-goals, genuine alternatives, acceptance criteria, and risks.
+- Discuss unresolved semantics before code commits the decision. Do not use SPEC
+  tiers or require fixed requirements/design/tasks files.
+- Add or update an Agent Note for durable changes to behavior, architecture,
+  shared contracts, process or tooling, testing strategy, configuration, or
+  wire and persistence formats.
+- Keep current behavior in README/current docs, specialized security,
+  conformance, licensing, and isolation evidence in their owning documents, and
+  general durable rationale in Agent Notes.
+- Every abstraction, state mechanism, public interface, configuration option,
+  compatibility path, and package needs a current owner and consumer.
+- Prefer the smallest architecture that preserves required behavior, licensing,
+  fidelity, and isolation. Remove dead layers, duplicate paths, speculative
+  compatibility, and abstractions without current consumers only when evidence
+  makes that safe.
+- Keep implementation, tests, current docs, and the owning Agent Note coherent.
+- Tests follow repository conventions and need not move into a universal test
+  folder. Write a postmortem only for subtle, systemic, costly-to-rediscover
+  incidents.
 
 ## Work Mode
 
@@ -50,6 +76,8 @@ Run the foundation checks with:
 
 ```sh
 make check
+node tools/governance/verify_agent_notes.mjs
+node tools/governance/verify_bilingual_docs.mjs
 ```
 
 Document and run component-specific tests as soon as code is introduced.

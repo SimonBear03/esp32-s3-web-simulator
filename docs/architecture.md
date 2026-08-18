@@ -1,5 +1,7 @@
 # Initial Architecture
 
+English | [中文](architecture.zh.md)
+
 ## Product Contract
 
 The simulator executes the same merged ESP32-S3 flash image intended for
