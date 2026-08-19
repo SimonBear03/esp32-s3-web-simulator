@@ -10,7 +10,9 @@ up, and how the result is verified.
 
 Use `{lifecycle}/{class}/yyyy-mm-dd-topic.md`.
 
-- `proposed`: intended decision, acceptance criteria, and risks.
+- `proposed`: shaped proposal awaiting explicit implementation authorization.
+- `building`: explicitly authorized work that is not ready for acceptance.
+- `review`: candidate implementation with verification awaiting Simon.
 - `implemented`: present-tense shipped rationale, consequences, and evidence.
 - `rejected`: declined proposal kept only while it prevents a plausible error.
 - `archived`: frozen, low-future-value implemented notes only.
@@ -36,13 +38,18 @@ default, not a higher authority.
 
 ## Required Format
 
-Proposed notes contain `Problem`, `Proposal`, `Alternatives considered`,
-`Acceptance criteria`, and `Risks`. Implemented notes contain `Problem`,
-`Decision`, `Alternatives considered`, `Consequences`, and `Verification`.
-Rejected notes keep the proposed body and use
+Proposed and building notes contain `Problem`, `Proposal`, `Alternatives
+considered`, `Acceptance criteria`, and `Risks`. Review notes retain that
+structure and add `Verification` after `Risks`. Implemented notes contain
+`Problem`, `Decision`, `Alternatives considered`, `Consequences`, and
+`Verification`. Rejected notes keep the proposed body and use
 `Status: rejected — <reason>`.
 
-Partly implemented work remains proposed. Implemented notes stay factually
-current when paths or defaults move. Superseding decisions get new cross-linked
-notes; do not rewrite an old decision into its opposite. Archived triplets are
-frozen and are not current authority.
+Proposed does not authorize implementation. Explicit approval moves the complete
+triplet to building. Partly implemented work remains building. A verified
+candidate moves to review; requested changes return it to building. Only
+Simon-accepted shipped work is rewritten and moved to implemented. The folder
+and matching status line are the only lifecycle authority; do not shadow them
+in a task or database. Every move includes both languages and the sidecar and
+repairs inbound links. Archived triplets are frozen and are not current
+authority.

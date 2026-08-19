@@ -5,10 +5,12 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = path.resolve(process.cwd(), 'agent_notes');
-const lifecycles = new Set(['proposed', 'implemented', 'rejected']);
+const lifecycles = new Set(['proposed', 'building', 'review', 'implemented', 'rejected']);
 const classes = new Set(['feature', 'bug-fix', 'simplification', 'architecture', 'process', 'testing']);
 const required = {
   proposed: ['Problem', 'Proposal', 'Alternatives considered', 'Acceptance criteria', 'Risks'],
+  building: ['Problem', 'Proposal', 'Alternatives considered', 'Acceptance criteria', 'Risks'],
+  review: ['Problem', 'Proposal', 'Alternatives considered', 'Acceptance criteria', 'Risks', 'Verification'],
   implemented: ['Problem', 'Decision', 'Alternatives considered', 'Consequences', 'Verification'],
   rejected: ['Problem', 'Proposal', 'Alternatives considered'],
 };
